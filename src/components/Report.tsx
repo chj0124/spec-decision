@@ -387,7 +387,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 边际效益分析
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            以单价最低的「{result.baseline?.name}」为基准，评估买大包装值不值
+            以最小包装「{margins[0]?.fromName ?? result.baseline?.name}」为基准，评估买大包装值不值
           </p>
           <div className="space-y-3">
             {margins.map((m, i) => (

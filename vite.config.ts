@@ -33,7 +33,7 @@ function aiProxyPlugin(): Plugin {
             chunks.push(chunk as Buffer)
           }
           const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
-          const { baseUrl, apiKey, model, messages, temperature } = body
+          const { baseUrl, apiKey, model, messages, temperature, ...extra } = body
 
           if (!baseUrl || !apiKey || !model) {
             res.statusCode = 400
@@ -53,6 +53,7 @@ function aiProxyPlugin(): Plugin {
               model,
               messages,
               temperature: typeof temperature === 'number' ? temperature : 0.1,
+              ...extra,
             }),
           })
 

@@ -70,45 +70,35 @@ export function toSku(r: RecognizedSku, labelToId?: Record<string, string>): Sku
  * }
  *
  * 关键：模型自适应，不预设维度。食品可能识别"重量/口味"，数码识别"内存/电池/屏幕"。
+ * 优化：要求直接输出 JSON，不要解释、不要推理，减少响应时间。
  */
-export const RECOGNIZE_PROMPT = `你是购物 App 截图的规格抽取器。请识别截图中**所有**商品 SKU 规格，一个都不能漏。
+export const RECOGNIZE_PROMPT = `识别截图里所有商品 SKU 规格。直接输出 JSON，不要任何解释、推理或 markdown。
 
-**第一步：判断商品类型**（如 零食、饮料、洗护、数码、手机、电脑、家电、美妆、服饰 等）。
+输出格式：
+{"category":"商品类型","dims":[维度定义],"items":[规格列表]}
 
-**第二步：根据商品类型，识别该类商品的关键对比参数维度**（2-5 个，用户做购买决策时真正关心的）：
-- 食品/零食：可能是 净含量、口味数、热量、蛋白质 等
-- 手机/数码：可能是 内存、存储、电池容量、屏幕尺寸、像素 等
-- 洗护：可能是 容量、功效、肤质 等
-- 不要把"价格""名称"作为参数维度（系统已内置）
+维度定义 dims（2-5个，用户买这类商品时真正关心的参数，不要把价格/名称作为维度）：
+- label: 维度名
+- type: "higher-better"|"lower-better"|"boolean"|"text"
+- unit: 单位（可选）
+- levels: 仅 text 类型需要，按从优到劣排列
 
-每个维度需指定：
-- label: 维度名（简洁，如"电池容量"）
-- type: 类型，必须是以下之一：
-  - "higher-better"（越大越好，如电池容量、内存）
-  - "lower-better"（越小越好，如重量、价格）
-  - "boolean"（是/否，如"是否含屏幕"）
-  - "text"（评级，如能效等级 A/B/C，需提供 levels 数组）
-- unit: 单位（如 mAh、GB、英寸），可选
-- levels: 仅 type="text" 时提供，按从优到劣排列，如 ["A","B","C"]
+规格列表 items（每个 SKU）：
+- name: 规格名称
+- price: 总价（元，纯数字）
+- quantity: 单件含量数值（数码产品填1）
+- unit: 单位（g/ml/个/GB等）
+- packs: 件数（数码产品填1）
+- params: 对象，key=维度label，value=该SKU在该维度的值
+- confidence: 把握 0-1
 
-**第三步：对每个 SKU，识别基础字段 + 该 SKU 在各维度的取值**：
-- name: 规格名称（口味 + 款式，如"香辣味 16g×8袋" 或 "8GB+256GB 黑色"）
-- price: 总价数字（元，只保留数字）
-- quantity: 单件含量数值（如 16）或 1（数码产品通常为 1）
-- unit: 含量单位（g / ml / 个 / GB 等；数码产品用"个"或"件"）
-- packs: 件数/袋数（数码产品通常为 1）
-- params: 对象，key 用维度 label，value 为该 SKU 在该维度的值（数字或字符串或 "yes"/"no"）
-- confidence: 你对这条识别的把握（0-1）
+示例（手机）：
+{"category":"手机","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"电池容量":5000},"confidence":0.9}]}
 
-**严格只返回 JSON 对象**，不要任何多余文字、不要 markdown 代码块。
+示例（零食）：
+{"category":"零食","dims":[{"label":"净含量","type":"higher-better","unit":"g"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16},"confidence":0.95}]}
 
-**示例 1（零食）**：
-{"category":"零食","dims":[{"label":"净含量","type":"higher-better","unit":"g"},{"label":"袋数","type":"higher-better"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16,"袋数":8},"confidence":0.95}]}
-
-**示例 2（手机）**：
-{"category":"手机","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"存储","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"},{"label":"屏幕尺寸","type":"higher-better","unit":"英寸"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"存储":256,"电池容量":5000,"屏幕尺寸":6.7},"confidence":0.92}]}
-
-若某字段看不清，给出最合理估计并把 confidence 降到 0.6 以下。`
+只输出 JSON，不要其他文字。`
 
 /**
  * 调用识别服务。
@@ -120,8 +110,8 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
   // 1) 优先走用户在 AI 设置里配的视觉模型（dev 模式自动走 vite 代理）
   if (isVisionReady()) {
     try {
-      const base64 = await fileToBase64(file)
-      const raw = await visionChat(RECOGNIZE_PROMPT, base64, file.type || 'image/jpeg')
+      const { base64, mime } = await compressImage(file)
+      const raw = await visionChat(RECOGNIZE_PROMPT, base64, mime)
       const parsed = parseResult(raw)
       if (parsed.items.length === 0) {
         return {
@@ -150,11 +140,11 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
   const endpoint = import.meta.env.VITE_RECOGNIZE_ENDPOINT as string | undefined
   if (endpoint) {
     try {
-      const base64 = await fileToBase64(file)
+      const { base64, mime } = await compressImage(file)
       const resp = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64, prompt: RECOGNIZE_PROMPT }),
+        body: JSON.stringify({ image: base64, mime, prompt: RECOGNIZE_PROMPT }),
       })
       if (!resp.ok) throw new Error(`识别服务返回 ${resp.status}`)
       const data = (await resp.json()) as { items: RecognizedSku[]; dims?: RecognizedDim[]; category?: string; note?: string }
@@ -261,6 +251,70 @@ function demoResult(note?: string): RecognizeResult {
     source: 'demo',
     note: note ?? '演示模式（未配置视觉模型）：示例 4 款手机规格 · 3 个参数维度。到「AI 设置」配一个视觉模型即可真实识别。',
   }
+}
+
+/**
+ * 压缩图片：缩放到 max 1280px + JPEG quality 85。
+ * 用户截图通常 1-5MB（高分辨率 PNG），压缩到 100-300KB，
+ * 大幅减小请求 body + 加快模型处理。
+ */
+async function compressImage(file: File, maxDim = 1280, quality = 0.85): Promise<{ base64: string; mime: string }> {
+  // 如果已经是小图（< 300KB），直接转 base64 不压缩
+  if (file.size < 300 * 1024) {
+    const base64 = await fileToBase64(file)
+    return { base64, mime: file.type || 'image/jpeg' }
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        // 等比缩放，长边不超过 maxDim
+        let { width, height } = img
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round((height / width) * maxDim)
+            width = maxDim
+          } else {
+            width = Math.round((width / height) * maxDim)
+            height = maxDim
+          }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('canvas 不可用'))
+          return
+        }
+        ctx.drawImage(img, 0, 0, width, height)
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error('压缩失败'))
+              return
+            }
+            const reader2 = new FileReader()
+            reader2.onload = () => {
+              const result = String(reader2.result)
+              const base64 = result.includes(',') ? result.split(',')[1] : result
+              resolve({ base64, mime: 'image/jpeg' })
+            }
+            reader2.onerror = reject
+            reader2.readAsDataURL(blob)
+          },
+          'image/jpeg',
+          quality,
+        )
+      }
+      img.onerror = () => reject(new Error('图片加载失败'))
+      img.src = String(reader.result)
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 }
 
 function fileToBase64(file: File): Promise<string> {

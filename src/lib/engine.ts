@@ -215,21 +215,32 @@ export function scoreItems(
   })
 }
 
-/** 生成边际效益分析：以「单价最低」为基准，对比每个更贵的规格是否值得升级 */
+/**
+ * 生成边际效益分析：以「总量最少者」为基准（通常是最小包装），
+ * 评估升级到大包装是否划算。
+ *
+ * 关键：基准必须是总量最少者，而非单价最低者。
+ * 若以单价最低者为基准，其他 SKU 的单价都 ≥ 基准，
+ * dropPct 永远 ≤ 0，所有结论都是"不太划算"——逻辑错误。
+ * 以最小包装为基准时，大包装单价更低 → dropPct > 0 → "值得升级"，
+ * 大包装单价更高 → dropPct < 0 → "不建议"，结论才有正有负。
+ */
 export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
   if (sorted.length < 2) return []
-  // 基准 = 单价最低者
-  const base = [...sorted].sort((a, b) => a.unitPrice - b.unitPrice)[0]
+  // 基准 = 总量最少者（最小包装），评估"升级到大包装值不值"
+  const base = [...sorted].sort((a, b) => a.totalQuantity - b.totalQuantity)[0]
   const out: MarginInsight[] = []
 
   for (const item of sorted) {
     if (item.id === base.id) continue
     const extraCost = round(item.price - base.price, 2)
     const extraQuantity = round(item.totalQuantity - base.totalQuantity, 2)
+    // 单价变化：正值 = 单价下降（大包装更划算），负值 = 单价上涨
     const dropPct =
       base.unitPrice > 0
         ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
         : 0
+    // 值得升级：多买了量 + 单价降低
     const worthIt = dropPct > 0 && extraQuantity > 0
 
     let verdict = ''
@@ -244,7 +255,7 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
         dropPct,
       ).toFixed(1)}%，性价比倒退，不建议。`
     } else {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 但量没多多少，边际收益不明显。`
+      verdict = `多花 ¥${extraCost.toFixed(2)} 但单价没降，边际收益不明显。`
     }
 
     out.push({
