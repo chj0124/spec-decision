@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
-import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec } from '../lib/engine'
+import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImage, toSku } from '../lib/recognize'
 import type { RecognizeResult } from '../lib/recognize'
@@ -180,7 +180,11 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       mergedDims.push({ id, label: d.label, type: d.type, weight: 20, unit: d.unit, levels: d.levels })
       labelToId[d.label] = id
     }
-    onConfigChange({ ...config, dims: mergedDims })
+    // category 仅在替换模式或尚未设置时更新（避免追加模式覆盖已有类型）
+    const nextCategory = mode === 'replace' || !config.category
+      ? review?.category ?? config.category
+      : config.category
+    onConfigChange({ ...config, dims: mergedDims, category: nextCategory })
     const newSkus = items.map((r) => toSku(r, labelToId))
     onChange(mode === 'replace' ? newSkus : [...skus, ...newSkus])
     setReview(null)
@@ -236,6 +240,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   }, [skus])
 
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
+  const flavorLabel = inferFlavorLabel(config.category)
 
   return (
     <div className="space-y-6">
@@ -548,7 +553,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
           <span className="text-[11px] text-slate-500">分组折叠：</span>
           {(['flavor', 'quantity', 'packs'] as GroupBy[]).map((g) => {
-            const label = g === 'flavor' ? '按口味' : g === 'quantity' ? '按重量' : '按数量'
+            const label = g === 'flavor' ? `按${flavorLabel}` : g === 'quantity' ? '按重量' : '按数量'
             const active = groupBy === g
             return (
               <button
@@ -585,7 +590,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             <thead>
               <tr className="border-b border-edge text-left text-[11px] text-slate-500">
                 <th className="px-3 py-3 font-medium w-8">#</th>
-                <th className="px-3 py-3 font-medium w-28">口味</th>
+                <th className="px-3 py-3 font-medium w-28">{flavorLabel}</th>
                 <th className="px-3 py-3 font-medium min-w-[150px]">规格（重量×数量）</th>
                 <th className="px-3 py-3 font-medium w-24">总价 ¥</th>
                 <th className="px-3 py-3 font-medium w-24">单件含量</th>
@@ -621,6 +626,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       updateParam={updateParam}
                       remove={remove}
                       dims={config.dims}
+                      flavorLabel={flavorLabel}
                     />
                   )
                 },
@@ -669,9 +675,10 @@ interface GroupRowsProps {
   updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
   dims: ParamDim[]
+  flavorLabel: string
 }
 
-function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims }: GroupRowsProps) {
+function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims, flavorLabel }: GroupRowsProps) {
   // 列数：# + 口味 + 规格 + 总价 + 含量 + 单位 + 数量 + N个维度 + 总量 + 单价 + 操作
   const colCount = 10 + dims.length
   return (
@@ -710,6 +717,7 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
               remove={remove}
               indented={isGrouped}
               dims={dims}
+              flavorLabel={flavorLabel}
             />
           )
         })}
@@ -727,9 +735,10 @@ interface RowFieldsProps {
   remove: (id: string) => void
   indented: boolean
   dims: ParamDim[]
+  flavorLabel: string
 }
 
-function RowFields({ s, idx, update, updateParam, remove, indented, dims }: RowFieldsProps) {
+function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavorLabel }: RowFieldsProps) {
   const total = s.quantity * Math.max(1, s.packs)
   const up = total > 0 && s.price > 0 ? s.price / total : 0
   const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
@@ -819,12 +828,12 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims }: RowF
         {indented && <span className="text-edge mr-1">·</span>}
         {String(idx + 1).padStart(2, '0')}
       </td>
-      {/* 口味 */}
+      {/* 口味/型号/颜色（根据商品类型自适应） */}
       <td className="px-3 py-2">
         <input
           value={flavor}
           onChange={(e) => setName(e.target.value, spec)}
-          placeholder="口味"
+          placeholder={flavorLabel}
           className="field py-1.5 text-xs"
         />
       </td>

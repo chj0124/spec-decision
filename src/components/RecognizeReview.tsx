@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { RecognizedSku, RecognizedDim } from '../lib/recognize'
 import { LOW_CONFIDENCE } from '../lib/recognize'
-import { parseFlavor, parseSpec, buildSpec } from '../lib/engine'
+import { parseFlavor, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { ParamType } from '../lib/types'
 import { AlertCircle, Plus, Trash2, CheckCheck, RotateCcw, Info, Tag, Sliders } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -103,6 +103,7 @@ export default function RecognizeReview({
   const lowCount = rows.filter((r) => r.confidence < LOW_CONFIDENCE).length
   const valid = rows.filter((r) => r.name.trim() && r.price > 0 && r.quantity > 0 && r.packs > 0)
   const hasDims = dimRows.length > 0
+  const flavorLabel = inferFlavorLabel(category)
 
   // 动态列宽：基础字段占 12 列中的 11 列，每个 param 维度挤一点
   // 简化处理：param 维度多时整行改为可横向滚动
@@ -226,7 +227,7 @@ export default function RecognizeReview({
               className="hidden sm:grid gap-2 px-3 text-[10px] text-slate-500 font-medium mb-1"
               style={{ gridTemplateColumns: `2fr 3fr 2fr 2fr 1fr 1fr${paramCols > 0 ? ` repeat(${paramCols}, 1.2fr)` : ''} 0.5fr` }}
             >
-              <span>口味</span>
+              <span>{flavorLabel}</span>
               <span>规格（重量×数量）</span>
               <span>总价 ¥</span>
               <span>含量</span>
@@ -259,13 +260,13 @@ export default function RecognizeReview({
                     }`}
                     style={{ gridTemplateColumns: `2fr 3fr 2fr 2fr 1fr 1fr${paramCols > 0 ? ` repeat(${paramCols}, 1.2fr)` : ''} 0.5fr` }}
                   >
-                    {/* 口味 */}
+                    {/* 口味/型号/颜色（根据商品类型自适应） */}
                     <div className="flex items-center gap-1.5">
                       {low && <AlertCircle className="h-3.5 w-3.5 text-amber-400 shrink-0" />}
                       <input
                         value={flavor}
                         onChange={(e) => setNameParts(i, e.target.value, spec)}
-                        placeholder="口味"
+                        placeholder={flavorLabel}
                         className="field py-1.5 text-xs w-full"
                       />
                     </div>

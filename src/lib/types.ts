@@ -99,6 +99,8 @@ export interface DecisionConfig {
   priceWeight: number // 价格维度自身权重（默认 50）
   preference: Preference // 决策偏好
   budget?: number // 预算上限（preference=budget 时生效）
+  /** 商品类型（由截图识别自动填入，如"零食"/"手机"/"五金螺丝"），用于自适应列名 */
+  category?: string
 }
 
 export interface PresetField {

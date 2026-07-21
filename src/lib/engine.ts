@@ -346,7 +346,27 @@ export function buildReasons(best: ComputedSku, items: ComputedSku[]): string[] 
 }
 
 /**
- * 按定价因子聚合分簇。
+ * 根据商品类型推断"口味列"应显示的列名。
+ * 这列本质是 SKU 名称里拆出的第一个词（parseFlavor），对零食是口味，对数码是颜色，对五金是型号。
+ */
+export function inferFlavorLabel(category?: string): string {
+  const c = (category ?? '').trim()
+  if (!c) return '口味'
+  // 五金/螺丝/工具 → 型号
+  if (/螺丝|五金|工具|配件|零件|紧固/i.test(c)) return '型号'
+  // 手机/电脑/数码 → 颜色/版本
+  if (/手机|电脑|数码|电子|平板|笔记本/i.test(c)) return '颜色'
+  // 服装/鞋帽 → 款式
+  if (/服装|衣服|鞋|帽|袜|穿搭/i.test(c)) return '款式'
+  // 食品/零食/饮料 → 口味
+  if (/零食|食品|饮料|吃的|零食|茶叶|咖啡/i.test(c)) return '口味'
+  // 洗护/美妆 → 香型
+  if (/洗护|美妆|护肤|香水|洗发|沐浴/i.test(c)) return '香型'
+  // 默认
+  return '型号'
+}
+
+/**
  * 把「quantity × packs × unit 相同」的规格归为一簇——它们价格结构一致，
  * 差异只在口味/颜色等「不影响单价」的干扰维度上。
  * 决策时以簇为单位比价，簇内再挑口味，把 12 选 1 降维成 4 选 1。
