@@ -43,6 +43,9 @@ export interface ComputedSku extends Sku {
   dimScores?: Record<string, number>
 }
 
+/** 边际效益分级 */
+export type MarginGrade = 'great' | 'good' | 'fair' | 'poor' | 'bad'
+
 // 边际效益：以「基准（最便宜总量最小）」为参照，升级到大包装是否划算
 export interface MarginInsight {
   fromId: string
@@ -52,8 +55,12 @@ export interface MarginInsight {
   extraCost: number // 多花的钱
   extraQuantity: number // 多买的量
   unit: string
-  unitPriceDropPct: number // 单价下降百分比
-  worthIt: boolean
+  unitPriceDropPct: number // 单价下降百分比（正=降价，负=涨价）
+  /** 每多买 1 基准单位量所节省的钱（元/单位），正值=省，负值=亏 */
+  marginalSaving: number
+  /** 分级（更精细的结论，替代原 worthIt 布尔值） */
+  grade: MarginGrade
+  worthIt: boolean // 保留向后兼容：grade 为 great/good 时为 true
   verdict: string
 }
 

@@ -9,6 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   RadarChart, PolarGrid, PolarAngleAxis, Radar, PolarRadiusAxis,
+  LineChart, Line, CartesianGrid, Legend,
 } from 'recharts'
 
 interface Props {
@@ -34,6 +35,17 @@ const tooltipStyle = {
 // 否则它会用默认深色（#333 之类），在深色背景上"融为一体"看不清。
 const tooltipLabelStyle = { color: '#e2e8f0', marginBottom: '4px' }
 const tooltipItemStyle = { color: '#e2e8f0' }
+
+/** 边际效益分级样式映射 */
+const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string }> = {
+  great: { label: '闭眼入', badge: 'bg-cyan-glow/15 text-cyan-glow', dot: 'bg-cyan-glow' },
+  good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-400',     dot: 'bg-sky-400' },
+  fair:  { label: '持平',   badge: 'bg-slate-500/20 text-slate-300', dot: 'bg-slate-400' },
+  poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-400', dot: 'bg-amber-400' },
+  bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-400',     dot: 'bg-red-400' },
+}
+
+const round6 = (n: number) => Math.round(n * 1e6) / 1e6
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
@@ -379,72 +391,134 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </section>
       </div>
 
-      {/* 边际效益 + 避坑 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 边际效益 */}
+      {/* 边际效益分析：折线图 + 表格 */}
+      {margins.length > 0 && (
         <section className="glass rounded-2xl p-6">
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 边际效益分析
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            以最小包装「{margins[0]?.fromName ?? result.baseline?.name}」为基准，评估买大包装值不值
+            以最小包装「{margins[0]?.fromName ?? result.baseline?.name}」为基准，折线斜率越陡 = 边际效益变化越快
           </p>
-          <div className="space-y-3">
-            {margins.map((m, i) => (
-              <div
-                key={i}
-                className={`rounded-xl border p-4 ${
-                  m.worthIt
-                    ? 'border-cyan-glow/30 bg-cyan-glow/5'
-                    : 'border-edge bg-brand-soft/50'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3 mb-2">
-                  <span className="text-sm font-semibold truncate">{m.toName}</span>
-                  <span
-                    className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
-                      m.worthIt ? 'bg-cyan-glow/15 text-cyan-glow' : 'bg-amber-500/15 text-amber-400'
-                    }`}
-                  >
-                    {m.worthIt ? '值得升级' : '不太划算'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 leading-relaxed">{m.verdict}</p>
-                <div className="mt-3 flex gap-4 text-[11px] tabular">
-                  <span className="text-slate-500">
-                    多花 <span className="text-brand-deep">{fmt.yuan(m.extraCost)}</span>
-                  </span>
-                  <span className="text-slate-500">
-                    多得 <span className="text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</span>
-                  </span>
-                  <span className="text-slate-500">
-                    单价变化{' '}
-                    <span className={m.unitPriceDropPct > 0 ? 'text-cyan-glow' : 'text-red-400'}>
-                      {m.unitPriceDropPct > 0 ? '-' : '+'}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
-                    </span>
-                  </span>
-                </div>
-              </div>
+
+          {/* 折线图：横轴=总量，纵轴=单价。斜率反映边际效益 */}
+          <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
+            <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-2">
+              <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价随总量变化曲线
+              <span className="text-slate-600">· 下行=大包装更划算，陡降=边际效益高</span>
+            </div>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={[...items].sort((a, b) => a.totalQuantity - b.totalQuantity).map((it) => ({
+                    name: it.name.length > 12 ? it.name.slice(0, 12) + '…' : it.name,
+                    总量: it.totalQuantity,
+                    单价: round6(it.unitPrice),
+                  }))}
+                  margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
+                  <XAxis
+                    dataKey="总量"
+                    type="number"
+                    tick={{ fill: '#64748b', fontSize: 10 }}
+                    tickFormatter={(v) => fmt.num(v)}
+                    label={{ value: '总量', fill: '#64748b', fontSize: 10, position: 'insideBottom', offset: -2 }}
+                  />
+                  <YAxis
+                    tick={{ fill: '#64748b', fontSize: 10 }}
+                    tickFormatter={(v) => `¥${v}`}
+                    width={56}
+                  />
+                  <Tooltip
+                    contentStyle={tooltipStyle}
+                    labelStyle={tooltipLabelStyle}
+                    itemStyle={tooltipItemStyle}
+                    labelFormatter={(v) => `总量 ${fmt.num(Number(v))}`}
+                    formatter={(v: number) => [`¥${v}`, '单价']}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="单价"
+                    stroke="#06b6d4"
+                    strokeWidth={2}
+                    dot={{ fill: '#06b6d4', r: 4 }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* 表格：精细分级 + 关键指标 */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[640px]">
+              <thead>
+                <tr className="border-b border-edge text-left text-[10px] text-slate-500">
+                  <th className="px-2 py-2 font-medium">规格</th>
+                  <th className="px-2 py-2 font-medium text-right">多花</th>
+                  <th className="px-2 py-2 font-medium text-right">多得</th>
+                  <th className="px-2 py-2 font-medium text-right">单价变化</th>
+                  <th className="px-2 py-2 font-medium text-right">每{margins[0]?.unit ?? ''}省/亏</th>
+                  <th className="px-2 py-2 font-medium text-center">评级</th>
+                </tr>
+              </thead>
+              <tbody>
+                {margins.map((m, i) => {
+                  const style = GRADE_STYLE[m.grade]
+                  return (
+                    <tr key={i} className="border-b border-edge/50 hover:bg-brand-soft/30 transition-colors">
+                      <td className="px-2 py-2.5">
+                        <div className="font-medium truncate max-w-[160px]" title={m.toName}>{m.toName}</div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">{m.verdict}</div>
+                      </td>
+                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
+                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</td>
+                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-cyan-glow' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                        {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
+                      </td>
+                      <td className={`px-2 py-2.5 text-right tabular ${m.marginalSaving > 0 ? 'text-cyan-glow' : m.marginalSaving < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                        {m.marginalSaving > 0 ? '省' : m.marginalSaving < 0 ? '亏' : ''} ¥{Math.abs(m.marginalSaving).toFixed(4)}
+                      </td>
+                      <td className="px-2 py-2.5 text-center">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${style.badge}`}>
+                          {style.label}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 图例 */}
+          <div className="mt-4 flex flex-wrap gap-3 text-[10px] text-slate-500">
+            {Object.entries(GRADE_STYLE).map(([k, v]) => (
+              <span key={k} className="inline-flex items-center gap-1">
+                <span className={`inline-block w-2.5 h-2.5 rounded-sm ${v.dot}`} />
+                {v.label}
+              </span>
             ))}
           </div>
         </section>
+      )}
 
-        {/* 避坑提示 */}
-        <section className="glass rounded-2xl p-6">
-          <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-400" /> 避坑提示
-          </h3>
-          <p className="text-xs text-slate-500 mb-5">下单前，先看清这些潜在的坑</p>
-          <ul className="space-y-3">
-            {warnings.map((w, i) => (
-              <li key={i} className="flex gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4">
-                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+      {/* 避坑提示 */}
+      <section className="glass rounded-2xl p-6">
+        <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-400" /> 避坑提示
+        </h3>
+        <p className="text-xs text-slate-500 mb-5">下单前，先看清这些潜在的坑</p>
+        <ul className="space-y-3">
+          {warnings.map((w, i) => (
+            <li key={i} className="flex gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4">
+              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   )
 }

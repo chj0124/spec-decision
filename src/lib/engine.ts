@@ -2,6 +2,7 @@ import type {
   ComputedSku,
   DecisionConfig,
   DecisionResult,
+  MarginGrade,
   MarginInsight,
   ParamDim,
   ParamValue,
@@ -219,15 +220,17 @@ export function scoreItems(
  * 生成边际效益分析：以「总量最少者」为基准（通常是最小包装），
  * 评估升级到大包装是否划算。
  *
- * 关键：基准必须是总量最少者，而非单价最低者。
- * 若以单价最低者为基准，其他 SKU 的单价都 ≥ 基准，
- * dropPct 永远 ≤ 0，所有结论都是"不太划算"——逻辑错误。
- * 以最小包装为基准时，大包装单价更低 → dropPct > 0 → "值得升级"，
- * 大包装单价更高 → dropPct < 0 → "不建议"，结论才有正有负。
+ * 分级逻辑（基于单价降幅 + 边际节省）：
+ * - great  闭眼入：更便宜还更多（extraCost≤0 且 extraQuantity>0）
+ * - great  超值：单价降幅 > 20%
+ * - good   划算：单价降幅 5%-20%
+ * - fair   持平：单价变化在 ±5% 以内
+ * - poor   小亏：单价涨幅 5%-15%
+ * - bad    不建议：单价涨幅 > 15%
  */
 export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
   if (sorted.length < 2) return []
-  // 基准 = 总量最少者（最小包装），评估"升级到大包装值不值"
+  // 基准 = 总量最少者（最小包装）
   const base = [...sorted].sort((a, b) => a.totalQuantity - b.totalQuantity)[0]
   const out: MarginInsight[] = []
 
@@ -235,27 +238,43 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
     if (item.id === base.id) continue
     const extraCost = round(item.price - base.price, 2)
     const extraQuantity = round(item.totalQuantity - base.totalQuantity, 2)
-    // 单价变化：正值 = 单价下降（大包装更划算），负值 = 单价上涨
     const dropPct =
       base.unitPrice > 0
         ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
         : 0
-    // 值得升级：多买了量 + 单价降低
-    const worthIt = dropPct > 0 && extraQuantity > 0
+    // 边际节省：每多买 1 基准单位量所省的钱（元/单位）
+    // = (基准单价 - 当前单价)，正值=省，负值=亏
+    const marginalSaving = round(base.unitPrice - item.unitPrice, 6)
+
+    // 分级
+    let grade: MarginGrade
+    if (extraCost <= 0 && extraQuantity > 0) {
+      grade = 'great'
+    } else if (dropPct > 20) {
+      grade = 'great'
+    } else if (dropPct > 5) {
+      grade = 'good'
+    } else if (dropPct >= -5) {
+      grade = 'fair'
+    } else if (dropPct >= -15) {
+      grade = 'poor'
+    } else {
+      grade = 'bad'
+    }
 
     let verdict = ''
-    if (extraCost <= 0 && extraQuantity >= 0) {
+    if (grade === 'great' && extraCost <= 0) {
       verdict = `「${item.name}」更便宜还更多，直接闭眼入。`
-    } else if (worthIt) {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价再降 ${Math.abs(
-        dropPct,
-      ).toFixed(1)}%，囤得更狠更划算。`
-    } else if (dropPct < 0) {
-      verdict = `多花 ¥${extraCost.toFixed(2)}，单价反而上涨 ${Math.abs(
-        dropPct,
-      ).toFixed(1)}%，性价比倒退，不建议。`
+    } else if (grade === 'great') {
+      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价直降 ${dropPct.toFixed(1)}%，每${item.unit}省 ¥${marginalSaving.toFixed(4)}，超值。`
+    } else if (grade === 'good') {
+      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价降 ${dropPct.toFixed(1)}%，每${item.unit}省 ¥${marginalSaving.toFixed(4)}，划算。`
+    } else if (grade === 'fair') {
+      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价仅变 ${dropPct >= 0 ? '降' : '涨'} ${Math.abs(dropPct).toFixed(1)}%，基本持平。`
+    } else if (grade === 'poor') {
+      verdict = `多花 ¥${extraCost.toFixed(2)}，单价反而涨 ${Math.abs(dropPct).toFixed(1)}%，每${item.unit}亏 ¥${Math.abs(marginalSaving).toFixed(4)}，小亏。`
     } else {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 但单价没降，边际收益不明显。`
+      verdict = `多花 ¥${extraCost.toFixed(2)}，单价暴涨 ${Math.abs(dropPct).toFixed(1)}%，每${item.unit}亏 ¥${Math.abs(marginalSaving).toFixed(4)}，明显不划算。`
     }
 
     out.push({
@@ -267,11 +286,18 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
       extraQuantity,
       unit: item.unit,
       unitPriceDropPct: dropPct,
-      worthIt,
+      marginalSaving,
+      grade,
+      worthIt: grade === 'great' || grade === 'good',
       verdict,
     })
   }
-  return out
+  // 按总量升序排列（从最小包装到大包装，便于折线图观察趋势）
+  return out.sort((a, b) => {
+    const aItem = sorted.find((s) => s.id === a.toId)
+    const bItem = sorted.find((s) => s.id === b.toId)
+    return (aItem?.totalQuantity ?? 0) - (bItem?.totalQuantity ?? 0)
+  })
 }
 
 /** 生成避坑提示 */
