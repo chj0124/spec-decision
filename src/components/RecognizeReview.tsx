@@ -15,7 +15,9 @@ interface Props {
   category?: string
   /** AI 识别到的参数维度定义 */
   dims?: RecognizedDim[]
-  onConfirm: (items: RecognizedSku[], dims?: RecognizedDim[]) => void
+  /** 工作台已有规格数量；>0 时提供「替换/追加」两种导入方式 */
+  existingCount?: number
+  onConfirm: (items: RecognizedSku[], dims: RecognizedDim[] | undefined, mode: 'replace' | 'append') => void
   onCancel: () => void
 }
 
@@ -31,7 +33,7 @@ const blank = (): RecognizedSku => ({
 })
 
 export default function RecognizeReview({
-  image, items, source, note, category, dims, onConfirm, onCancel,
+  image, items, source, note, category, dims, existingCount = 0, onConfirm, onCancel,
 }: Props) {
   const [rows, setRows] = useState<RecognizedSku[]>(items)
   // 维度也可编辑（用户可改 label / 删除 / 加维度）
@@ -344,6 +346,7 @@ export default function RecognizeReview({
               有效 <span className="text-cyan-glow font-semibold tabular">{valid.length}</span> / {rows.length} 条
               {valid.length !== rows.length && '（名称/价格/含量/件数 需填全）'}
               {hasDims && ` · 将导入 ${paramCols} 个参数维度`}
+              {existingCount > 0 && ` · 工作台已有 ${existingCount} 条，默认替换导入`}
             </>
           )}
           {source === 'error' && '识别失败，请检查 AI 配置后重试'}
@@ -355,13 +358,25 @@ export default function RecognizeReview({
           >
             {source === 'error' ? '关闭' : '取消'}
           </button>
+          {source !== 'error' && existingCount > 0 && (
+            <button
+              onClick={() => onConfirm(valid, dimRows, 'append')}
+              disabled={valid.length === 0}
+              title="保留现有规格，把识别结果追加到后面"
+              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl border border-cyan-glow/40 text-sm text-cyan-glow hover:shadow-glow disabled:opacity-40 transition-all"
+            >
+              追加导入
+            </button>
+          )}
           {source !== 'error' && (
             <button
-              onClick={() => onConfirm(valid, dimRows)}
+              onClick={() => onConfirm(valid, dimRows, existingCount > 0 ? 'replace' : 'append')}
               disabled={valid.length === 0}
+              title={existingCount > 0 ? `清空现有 ${existingCount} 条规格，用识别结果替换` : undefined}
               className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
             >
-              <CheckCheck className="h-4 w-4" /> 确认导入 {valid.length} 条
+              <CheckCheck className="h-4 w-4" />
+              {existingCount > 0 ? `替换导入 ${valid.length} 条` : `确认导入 ${valid.length} 条`}
             </button>
           )}
         </div>
