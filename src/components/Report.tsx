@@ -403,7 +403,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   <span className="text-sm font-semibold truncate">{m.toName}</span>
                   <span
                     className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
-                      m.worthIt ? 'bg-cyan-glow/15 text-cyan-glow' : 'bg-slate-700/50 text-slate-400'
+                      m.worthIt ? 'bg-cyan-glow/15 text-cyan-glow' : 'bg-amber-500/15 text-amber-400'
                     }`}
                   >
                     {m.worthIt ? '值得升级' : '不太划算'}
@@ -485,7 +485,7 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
               </span>
             )}
             {hasFlavors && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">
                 {cluster.members.length} 种口味
               </span>
             )}
