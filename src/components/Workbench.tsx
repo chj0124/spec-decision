@@ -114,9 +114,27 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     }
   }
 
-  // 确认导入：把修正后的识别结果并入工作台
-  const confirmImport = (items: import('../lib/recognize').RecognizedSku[]) => {
-    onChange([...skus, ...items.map(toSku)])
+  // 确认导入：把修正后的识别结果并入工作台，同时合并维度到 config
+  const confirmImport = (items: import('../lib/recognize').RecognizedSku[], dims?: import('../lib/recognize').RecognizedDim[]) => {
+    // 1) 把识别到的维度合并到 config.dims（用 label 去重），生成 label→id 映射
+    const labelToId: Record<string, string> = {}
+    const existingLabels = new Set(config.dims.map((d) => d.label))
+    const newDims: ParamDim[] = []
+    for (const d of dims ?? []) {
+      if (existingLabels.has(d.label)) continue
+      const id = uid()
+      newDims.push({ id, label: d.label, type: d.type, weight: 20, unit: d.unit, levels: d.levels })
+      labelToId[d.label] = id
+    }
+    // 已存在的维度也补上 label→id（用现有 id）
+    for (const d of config.dims) {
+      if (!labelToId[d.label]) labelToId[d.label] = d.id
+    }
+    if (newDims.length > 0) {
+      onConfigChange({ ...config, dims: [...config.dims, ...newDims] })
+    }
+    // 2) 导入 SKU，params key 从 label 映射到 dim.id
+    onChange([...skus, ...items.map((r) => toSku(r, labelToId))])
     setReview(null)
     setScanPreview(null)
   }
@@ -271,6 +289,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             items={review.items}
             source={review.source}
             note={review.note}
+            dims={review.dims}
+            category={review.category}
             onConfirm={confirmImport}
             onCancel={() => { setReview(null); setScanPreview(null) }}
           />
