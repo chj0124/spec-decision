@@ -13,7 +13,6 @@ import Workbench from './components/Workbench'
 import Report from './components/Report'
 import AiSettings from './components/AiSettings'
 import { Sun, Moon, LineChart, PencilLine, Settings } from 'lucide-react'
-import { AnimatePresence, motion } from 'framer-motion'
 
 type Page = 'workbench' | 'report'
 
@@ -146,35 +145,27 @@ export default function App() {
 
       {/* 主内容 */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={page}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -12 }}
-            transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
-          >
-            {page === 'workbench' ? (
-              <Workbench
-                skus={skus}
-                onChange={setSkus}
-                onGenerate={() => setPage('report')}
-                config={config}
-                onConfigChange={setConfig}
-                onLoadScene={handleLoadScene}
-              />
-            ) : (
-              <Report
-                result={result}
-                config={config}
-                unitWarning={unitMixWarning(normalizedSkus)}
-                onBack={() => setPage('workbench')}
-                onPreferenceChange={handlePreferenceChange}
-                onBudgetChange={handleBudgetChange}
-              />
-            )}
-          </motion.div>
-        </AnimatePresence>
+        <div key={page} className="animate-[pageIn_0.25s_ease-out]">
+          {page === 'workbench' ? (
+            <Workbench
+              skus={skus}
+              onChange={setSkus}
+              onGenerate={() => setPage('report')}
+              config={config}
+              onConfigChange={setConfig}
+              onLoadScene={handleLoadScene}
+            />
+          ) : (
+            <Report
+              result={result}
+              config={config}
+              unitWarning={unitMixWarning(normalizedSkus)}
+              onBack={() => setPage('workbench')}
+              onPreferenceChange={handlePreferenceChange}
+              onBudgetChange={handleBudgetChange}
+            />
+          )}
+        </div>
       </main>
 
       <footer className="max-w-7xl mx-auto px-6 pb-8 text-center text-xs text-slate-500">

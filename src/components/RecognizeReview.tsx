@@ -98,7 +98,8 @@ export default function RecognizeReview({
 
   const remove = (i: number) => setRows(rows.filter((_, idx) => idx !== i))
   const add = () => setRows([...rows, blank()])
-  const reset = () => { setRows(items); setDimRows(dims ?? []) }
+  // 重置：创建新数组确保 React 检测到引用变化（传入同一引用 React 不触发更新）
+  const reset = () => { setRows(items.map((r) => ({ ...r }))); setDimRows((dims ?? []).map((d) => ({ ...d }))) }
 
   const lowCount = rows.filter((r) => r.confidence < LOW_CONFIDENCE).length
   const valid = rows.filter((r) => r.name.trim() && r.price > 0 && r.quantity > 0 && r.packs > 0)
