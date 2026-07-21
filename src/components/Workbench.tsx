@@ -424,6 +424,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                               fontSize: '12px',
                               color: '#e2e8f0',
                             }}
+                            labelStyle={{ color: '#e2e8f0', marginBottom: '4px' }}
+                            itemStyle={{ color: '#e2e8f0' }}
                             formatter={(v: number) => `${v}`}
                           />
                         </PieChart>

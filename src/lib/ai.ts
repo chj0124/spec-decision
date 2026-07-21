@@ -45,26 +45,44 @@ export function isAiReady(): boolean {
   return c.enabled && Boolean(c.apiKey && c.baseUrl && c.model)
 }
 
-/** 调 AI 对话，返回文本。失败抛错，由调用方回退。 */
-export async function chat(prompt: string, system?: string): Promise<string> {
-  const c = loadAiConfig()
-  if (!c.enabled || !c.apiKey) throw new Error('AI 未配置')
+/** 调 AI 对话，返回文本。失败抛错，由调用方回退。
+ *  可传入 overrideConfig 用于"测试连接"等场景（不读 localStorage，直接用表单当前值）。
+ */
+export async function chat(
+  prompt: string,
+  system?: string,
+  overrideConfig?: AiConfig,
+): Promise<string> {
+  const c = overrideConfig ?? loadAiConfig()
+  if (!c.apiKey || !c.baseUrl || !c.model) throw new Error('AI 未配置（请填写 Base URL / API Key / Model）')
 
-  const resp = await fetch(`${c.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${c.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: c.model,
-      messages: [
-        ...(system ? [{ role: 'system', content: system }] : []),
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.1, // 单位换算/识别要确定性，低温
-    }),
-  })
+  let resp: Response
+  try {
+    resp = await fetch(`${c.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${c.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: c.model,
+        messages: [
+          ...(system ? [{ role: 'system', content: system }] : []),
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.1, // 单位换算/识别要确定性，低温
+      }),
+    })
+  } catch (e: any) {
+    // 浏览器 fetch 抛出的网络错误（CORS / DNS / 断网）通常是 TypeError: Failed to fetch
+    const reason = e?.message ?? String(e)
+    if (/failed to fetch|networkerror|load failed/i.test(reason)) {
+      throw new Error(
+        '网络请求失败（可能是 CORS 拦截、地址错误、或该服务商不允许浏览器直连）。',
+      )
+    }
+    throw new Error(`网络请求失败：${reason}`)
+  }
   if (!resp.ok) {
     const t = await resp.text().catch(() => '')
     throw new Error(`AI 请求失败 ${resp.status}: ${t.slice(0, 120)}`)

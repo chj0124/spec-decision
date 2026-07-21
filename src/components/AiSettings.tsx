@@ -30,8 +30,12 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
     setTesting(true)
     setTestResult(null)
     try {
-      // 临时写入配置做测试
-      const reply = await chat('回复"连接成功"三个字即可。', '你是连接测试助手。')
+      // 用表单当前值测试，不读 localStorage（避免"未保存就测不到"的问题）
+      const testConfig = {
+        ...form,
+        enabled: Boolean(form.apiKey && form.baseUrl && form.model),
+      }
+      const reply = await chat('回复"连接成功"三个字即可。', '你是连接测试助手。', testConfig)
       setTestResult({ ok: true, msg: `连接成功：${reply.slice(0, 20)}` })
     } catch (e: any) {
       setTestResult({ ok: false, msg: e.message ?? '连接失败' })

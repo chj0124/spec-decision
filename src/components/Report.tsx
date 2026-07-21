@@ -30,6 +30,10 @@ const tooltipStyle = {
   fontSize: '12px',
   color: '#e2e8f0',
 }
+// Recharts Tooltip 内部 label 与每个 item 的文字颜色需要单独指定，
+// 否则它会用默认深色（#333 之类），在深色背景上"融为一体"看不清。
+const tooltipLabelStyle = { color: '#e2e8f0', marginBottom: '4px' }
+const tooltipItemStyle = { color: '#e2e8f0' }
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
@@ -338,7 +342,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               <BarChart data={barSource} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
                 <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(34,211,238,0.06)' }} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={{ fill: 'rgba(34,211,238,0.06)' }} />
                 <Bar dataKey="单价" radius={[6, 6, 0, 0]}>
                   {barSource.map((d, i) => (
                     <Cell key={i} fill={d.isBest ? '#22d3ee' : '#1c2740'} />
@@ -368,7 +372,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     />
                   )
                 })}
-                <Tooltip contentStyle={tooltipStyle} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
