@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt } from '../lib/engine'
+import { fmt, mergeVariantSkus } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
@@ -398,7 +398,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 边际效益分析
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            以最小包装「{margins[0]?.fromName ?? result.baseline?.name}」为基准，折线斜率越陡 = 边际效益变化越快
+            相邻包装档位逐级对比，每步升级多花多少、单价降多少 · 折线斜率越陡 = 边际效益变化越快
           </p>
 
           {/* 折线图：横轴=总量，纵轴=单价。斜率反映边际效益 */}
@@ -410,7 +410,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart
-                  data={[...items].sort((a, b) => a.totalQuantity - b.totalQuantity).map((it) => ({
+                  data={mergeVariantSkus(items).map((it) => ({
                     name: it.name.length > 12 ? it.name.slice(0, 12) + '…' : it.name,
                     总量: it.totalQuantity,
                     单价: round6(it.unitPrice),

@@ -217,46 +217,51 @@ export function scoreItems(
 }
 
 /**
- * 生成边际效益分析：以「总量最少者」为基准（通常是最小包装），
- * 评估升级到大包装是否划算。
+ * 生成边际效益分析：真正的"边际"——相邻包装档位对比。
  *
- * 分级逻辑（基于单价降幅 + 边际节省）：
- * - great  闭眼入：更便宜还更多（extraCost≤0 且 extraQuantity>0）
- * - great  超值：单价降幅 > 20%
- * - good   划算：单价降幅 5%-20%
- * - fair   持平：单价变化在 ±5% 以内
- * - poor   小亏：单价涨幅 5%-15%
- * - bad    不建议：单价涨幅 > 15%
+ * 1) 先合并仅口味/颜色不同（同 price + totalQuantity + unit）的条目
+ * 2) 按总量升序排列
+ * 3) 每个档位和前一个档位对比：升级到这一档多花多少钱、多得多少量、单价降多少
+ *    这才是"边际效益"——每一步升级值不值，而非所有都和最小包装比
+ *
+ * 分级逻辑（基于相邻对比的单价变化）：
+ * - great  闭眼入：更便宜还更多，或单价降幅 > 15%
+ * - good   划算：单价降幅 3%-15%
+ * - fair   持平：单价变化在 ±3% 以内
+ * - poor   小亏：单价涨幅 3%-10%
+ * - bad    不建议：单价涨幅 > 10%
  */
 export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
   if (sorted.length < 2) return []
-  // 基准 = 总量最少者（最小包装）
-  const base = [...sorted].sort((a, b) => a.totalQuantity - b.totalQuantity)[0]
-  const out: MarginInsight[] = []
 
-  for (const item of sorted) {
-    if (item.id === base.id) continue
+  // 1) 合并同价同规格（仅口味/颜色不同）的条目
+  const merged = mergeVariantSkus(sorted)
+  if (merged.length < 2) return []
+
+  const out: MarginInsight[] = []
+  // 2) 相邻对比：每个档位 vs 前一个档位
+  for (let i = 1; i < merged.length; i++) {
+    const base = merged[i - 1]
+    const item = merged[i]
     const extraCost = round(item.price - base.price, 2)
     const extraQuantity = round(item.totalQuantity - base.totalQuantity, 2)
     const dropPct =
       base.unitPrice > 0
         ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
         : 0
-    // 边际节省：每多买 1 基准单位量所省的钱（元/单位）
-    // = (基准单价 - 当前单价)，正值=省，负值=亏
     const marginalSaving = round(base.unitPrice - item.unitPrice, 6)
 
     // 分级
     let grade: MarginGrade
     if (extraCost <= 0 && extraQuantity > 0) {
       grade = 'great'
-    } else if (dropPct > 20) {
+    } else if (dropPct > 15) {
       grade = 'great'
-    } else if (dropPct > 5) {
+    } else if (dropPct > 3) {
       grade = 'good'
-    } else if (dropPct >= -5) {
+    } else if (dropPct >= -3) {
       grade = 'fair'
-    } else if (dropPct >= -15) {
+    } else if (dropPct >= -10) {
       grade = 'poor'
     } else {
       grade = 'bad'
@@ -264,17 +269,17 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
 
     let verdict = ''
     if (grade === 'great' && extraCost <= 0) {
-      verdict = `「${item.name}」更便宜还更多，直接闭眼入。`
+      verdict = `比「${base.name}」更便宜还更多，直接闭眼入。`
     } else if (grade === 'great') {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价直降 ${dropPct.toFixed(1)}%，每${item.unit}省 ¥${marginalSaving.toFixed(4)}，超值。`
+      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，单价直降 ${dropPct.toFixed(1)}%，超值。`
     } else if (grade === 'good') {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价降 ${dropPct.toFixed(1)}%，每${item.unit}省 ¥${marginalSaving.toFixed(4)}，划算。`
+      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，单价降 ${dropPct.toFixed(1)}%，划算。`
     } else if (grade === 'fair') {
-      verdict = `多花 ¥${extraCost.toFixed(2)} 多买 ${extraQuantity}${item.unit}，单价仅变 ${dropPct >= 0 ? '降' : '涨'} ${Math.abs(dropPct).toFixed(1)}%，基本持平。`
+      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价仅${dropPct >= 0 ? '降' : '涨'} ${Math.abs(dropPct).toFixed(1)}%，基本持平。`
     } else if (grade === 'poor') {
-      verdict = `多花 ¥${extraCost.toFixed(2)}，单价反而涨 ${Math.abs(dropPct).toFixed(1)}%，每${item.unit}亏 ¥${Math.abs(marginalSaving).toFixed(4)}，小亏。`
+      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价反而涨 ${Math.abs(dropPct).toFixed(1)}%，小亏。`
     } else {
-      verdict = `多花 ¥${extraCost.toFixed(2)}，单价暴涨 ${Math.abs(dropPct).toFixed(1)}%，每${item.unit}亏 ¥${Math.abs(marginalSaving).toFixed(4)}，明显不划算。`
+      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价暴涨 ${Math.abs(dropPct).toFixed(1)}%，明显不划算。`
     }
 
     out.push({
@@ -292,12 +297,7 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
       verdict,
     })
   }
-  // 按总量升序排列（从最小包装到大包装，便于折线图观察趋势）
-  return out.sort((a, b) => {
-    const aItem = sorted.find((s) => s.id === a.toId)
-    const bItem = sorted.find((s) => s.id === b.toId)
-    return (aItem?.totalQuantity ?? 0) - (bItem?.totalQuantity ?? 0)
-  })
+  return out
 }
 
 /** 生成避坑提示 */
@@ -379,17 +379,54 @@ export function inferFlavorLabel(category?: string): string {
   const c = (category ?? '').trim()
   if (!c) return '口味'
   // 五金/螺丝/工具 → 型号
-  if (/螺丝|五金|工具|配件|零件|紧固/i.test(c)) return '型号'
-  // 手机/电脑/数码 → 颜色/版本
-  if (/手机|电脑|数码|电子|平板|笔记本/i.test(c)) return '颜色'
+  if (/螺丝|五金|工具|配件|零件|紧固|螺母|螺栓|垫片|轴承/i.test(c)) return '型号'
+  // 手机/电脑/数码 → 颜色
+  if (/手机|电脑|数码|电子|平板|笔记本|相机|耳机|充电/i.test(c)) return '颜色'
   // 服装/鞋帽 → 款式
-  if (/服装|衣服|鞋|帽|袜|穿搭/i.test(c)) return '款式'
-  // 食品/零食/饮料 → 口味
-  if (/零食|食品|饮料|吃的|零食|茶叶|咖啡/i.test(c)) return '口味'
+  if (/服装|衣服|鞋|帽|袜|穿搭|外套|裤子|裙/i.test(c)) return '款式'
   // 洗护/美妆 → 香型
-  if (/洗护|美妆|护肤|香水|洗发|沐浴/i.test(c)) return '香型'
-  // 默认
-  return '型号'
+  if (/洗护|美妆|护肤|香水|洗发|沐浴|牙膏|洗衣/i.test(c)) return '香型'
+  // 食品/零食/饮料/生鲜等 → 口味（覆盖坚果、蜜饯、膨化、肉脯、糕点等细分品类）
+  if (/零食|食品|饮料|吃的|茶叶|咖啡|坚果|蜜饯|膨化|肉脯|糕点|饼干|糖果|巧克力|方便面|挂面|调味|酱|罐头|水果|生鲜|乳|奶|茶|酒|水/i.test(c)) return '口味'
+  // 默认：食品是最常见场景，用"口味"
+  return '口味'
+}
+
+/**
+ * 合并仅口味/颜色不同的 SKU（同 price + totalQuantity + unit）。
+ * 合并后 name 为"口味1/口味2/口味3 规格"，保留规格信息。
+ * 用于边际效益分析，避免同价同规格的条目重复列出。
+ */
+export function mergeVariantSkus(sorted: ComputedSku[]): ComputedSku[] {
+  const groups = new Map<string, ComputedSku[]>()
+  for (const s of sorted) {
+    const key = `${s.price}|${s.totalQuantity}|${s.unit}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(s)
+  }
+  const merged: ComputedSku[] = []
+  for (const members of groups.values()) {
+    if (members.length === 1) {
+      merged.push(members[0])
+    } else {
+      // 提取每个 SKU 的口味部分，合并显示
+      const flavors: string[] = []
+      let spec = ''
+      for (const m of members) {
+        const { flavor, spec: s } = parseFlavor(m.name)
+        if (flavor) flavors.push(flavor)
+        if (!spec) spec = s
+      }
+      const rep = { ...members[0] }
+      if (flavors.length > 0 && spec) {
+        rep.name = `${flavors.join('/')} ${spec}`
+      } else {
+        rep.name = `${members[0].name} 等${members.length}种`
+      }
+      merged.push(rep)
+    }
+  }
+  return merged.sort((a, b) => a.totalQuantity - b.totalQuantity)
 }
 
 /**
