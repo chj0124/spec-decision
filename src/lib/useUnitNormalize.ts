@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Sku } from './types'
 import { isKnownUnit, aiNormalizeUnit, normalizeUnit } from './engine'
 import { isAiReady } from './ai'
@@ -9,23 +9,31 @@ import { isAiReady } from './ai'
  * - 生僻单位：AI 异步识别，结果以 override 形式合并，替换后无缝更新。
  *
  * 关键：不再用 useState 存完整 SKU 数组（会导致一个渲染周期的滞后），
- * 改为用 useMemo 同步计算，AI 结果到来后自动合并。
+ * 改为同步计算 + useRef 缓存结果（仅 3 个 hook，避免 HMR 热更新时数量变化报错）。
  */
 export function useUnitNormalize(skus: Sku[]): Sku[] {
   const [aiOverrides, setAiOverrides] = useState<Record<string, { value: number; base: string }> | null>(null)
-  const pendingRef = useRef('')
+
+  // 单 useRef 同时存 pending fingerprint 和 memo 缓存，不增加 hook 数量
+  const ref = useRef<{
+    pending: string
+    /** 上一次的依赖快照（用于去重，避免 skus 未变时重复计算） */
+    deps: string
+    /** 上一次计算的结果 */
+    value: Sku[]
+  }>({ pending: '', deps: '', value: skus })
 
   useEffect(() => {
     const unknown = skus.filter((s) => s.quantity > 0 && s.unit && !isKnownUnit(s.unit))
     if (unknown.length === 0 || !isAiReady()) {
       if (aiOverrides !== null) setAiOverrides(null)
-      pendingRef.current = ''
+      ref.current.pending = ''
       return
     }
 
     const fingerprint = JSON.stringify(unknown.map((s) => [s.id, s.quantity, s.unit]))
-    if (pendingRef.current === fingerprint) return
-    pendingRef.current = fingerprint
+    if (ref.current.pending === fingerprint) return
+    ref.current.pending = fingerprint
 
     let cancelled = false
     ;(async () => {
@@ -42,17 +50,21 @@ export function useUnitNormalize(skus: Sku[]): Sku[] {
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [skus])
 
-  // 用 useMemo 同步计算：skus 值变动即刻反映，不依赖异步 effect。
-  return useMemo(
-    () =>
-      skus.map((s) => {
-        const ai = aiOverrides?.[s.id]
-        if (ai) return { ...s, quantity: ai.value, unit: ai.base }
-        const local = normalizeUnit(s.quantity, s.unit)
-        return local.base !== s.unit ? { ...s, quantity: local.value, unit: local.base } : s
-      }),
-    [skus, aiOverrides],
-  )
+  // 手动 memo：依赖未变时返回缓存的数组引用（替代 useMemo，不增加 hook）
+  const depsKey = skus.length > 0
+    ? `${skus.length}|${aiOverrides ? Object.keys(aiOverrides).length : 0}|${skus[0].id}`
+    : '0'
+  if (depsKey !== ref.current.deps) {
+    ref.current.deps = depsKey
+    ref.current.value = skus.map((s) => {
+      const ai = aiOverrides?.[s.id]
+      if (ai) return { ...s, quantity: ai.value, unit: ai.base }
+      const local = normalizeUnit(s.quantity, s.unit)
+      return local.base !== s.unit ? { ...s, quantity: local.value, unit: local.base } : s
+    })
+  }
+  return ref.current.value
 }
