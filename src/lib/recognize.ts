@@ -21,6 +21,8 @@ export interface RecognizedSku {
   confidence: number
   /** 多维参数取值，key = RecognizedDim.label */
   params?: Record<string, string | number>
+  /** 批量识别时标记来自哪张图（索引），用于 review 面板显示来源角标 */
+  sourceImage?: number
 }
 
 export interface RecognizeResult {
@@ -187,6 +189,87 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
   // 3) 未配置任何识别能力 → 演示兜底（让用户能体验流程）
   await sleep(1500)
   return demoResult()
+}
+
+/**
+ * 批量识别多张图片：并发识别每张图，按规格名合并去重，标记来源图片索引。
+ *
+ * 设计要点：
+ * - 并发识别所有图片（Promise.allSettled），单张失败不影响其他
+ * - 相同 name 的 SKU 自动去重：保留后出现的（后识别的覆盖前者，因用户通常按顺序截更详细的图）
+ * - dims 按 label 去重合并：同一 label 只保留第一次出现的定义
+ * - category / flavorLabel 以第一张成功识别的结果为准
+ * - 每条 SKU 标记 sourceImage（图片索引），review 面板显示来源角标
+ */
+export async function recognizeImages(files: File[]): Promise<RecognizeResult> {
+  if (files.length === 1) {
+    // 单图直接走原逻辑，不附加 sourceImage
+    return recognizeImage(files[0])
+  }
+
+  const settled = await Promise.allSettled(files.map((f) => recognizeImage(f)))
+
+  let mergedItems: RecognizedSku[] = []
+  let mergedDims: RecognizedDim[] = []
+  let category: string | undefined
+  let flavorLabel: string | undefined
+  const notes: string[] = []
+  let failCount = 0
+  let hasApi = false
+
+  for (let i = 0; i < settled.length; i++) {
+    const r = settled[i]
+    if (r.status === 'rejected' || r.value.source === 'error') {
+      failCount++
+      const reason = r.status === 'rejected'
+        ? String(r.reason)
+        : r.value.note ?? '识别失败'
+      notes.push(`图${i + 1}：${reason}`)
+      continue
+    }
+    const res = r.value
+    if (!category) category = res.category
+    if (!flavorLabel) flavorLabel = res.flavorLabel
+    if (res.source === 'api') hasApi = true
+    if (res.note) notes.push(`图${i + 1}：${res.note}`)
+
+    // 合并 items：标记来源图，按 name 去重（后者覆盖前者）
+    for (const it of res.items) {
+      const tagged = { ...it, sourceImage: i }
+      const existIdx = mergedItems.findIndex((m) => m.name.trim() === it.name.trim())
+      if (existIdx >= 0) {
+        mergedItems[existIdx] = tagged
+      } else {
+        mergedItems.push(tagged)
+      }
+    }
+
+    // 合并 dims：按 label 去重
+    for (const d of res.dims ?? []) {
+      if (!mergedDims.some((m) => m.label === d.label)) {
+        mergedDims.push(d)
+      }
+    }
+  }
+
+  // 全部失败
+  if (mergedItems.length === 0) {
+    return {
+      items: [],
+      source: 'error',
+      note: `全部 ${files.length} 张图识别失败。${notes.join('；')}`,
+    }
+  }
+
+  const successCount = files.length - failCount
+  return {
+    items: mergedItems,
+    dims: mergedDims,
+    category,
+    flavorLabel,
+    source: hasApi ? 'api' : 'demo',
+    note: `批量识别 ${successCount}/${files.length} 张图成功 · 合并去重后 ${mergedItems.length} 个规格${failCount > 0 ? ` · ${failCount} 张失败` : ''}`,
+  }
 }
 
 /** 容错解析：剥离 markdown 代码块，提取 JSON 对象，校验并归一化字段 */

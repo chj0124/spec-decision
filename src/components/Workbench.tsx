@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
-import { recognizeImage, toSku } from '../lib/recognize'
+import { recognizeImage, recognizeImages, toSku } from '../lib/recognize'
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import RecognizeReview from './RecognizeReview'
@@ -39,9 +39,9 @@ const PARAM_TYPE_LABELS: Record<ParamType, string> = {
 
 export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange, onLoadScene }: Props) {
   const [scanning, setScanning] = useState(false)
-  const [scanPreview, setScanPreview] = useState<string | null>(null)
+  const [scanPreviews, setScanPreviews] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
-  const [review, setReview] = useState<(RecognizeResult & { image: string }) | null>(null)
+  const [review, setReview] = useState<(RecognizeResult & { images: string[] }) | null>(null)
   const [groupBy, setGroupBy] = useState<GroupBy | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [dimPanelOpen, setDimPanelOpen] = useState(true)
@@ -115,19 +115,21 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     } catch { /* 静默失败 */ }
   }
 
-  // AI 截图识别：调用识别服务 → 进入确认环节（可修正）→ 确认后才导入
-  const handleImage = async (file: File) => {
-    if (!file.type.startsWith('image/')) return
-    const url = URL.createObjectURL(file)
-    setScanPreview(url)
+  // AI 截图识别：支持单张或多张批量识别。
+  // 多张时并发识别后按规格名合并去重，解决「价格藏在 SKU 选择器里」需逐页截图的痛点。
+  const handleImages = async (files: File[]) => {
+    const imgs = files.filter((f) => f.type.startsWith('image/'))
+    if (imgs.length === 0) return
+    const urls = imgs.map((f) => URL.createObjectURL(f))
+    setScanPreviews(urls)
     setScanning(true)
     setReview(null)
     setScanElapsed(0)
     // 启动计时器，每秒更新等待时长
     scanTimerRef.current = setInterval(() => setScanElapsed((s) => s + 1), 1000)
     try {
-      const result = await recognizeImage(file)
-      setReview({ ...result, image: url })
+      const result = await recognizeImages(imgs)
+      setReview({ ...result, images: urls })
       // 语音提示识别结果
       if (result.source === 'error') {
         speak('识别失败，请检查截图或重试')
@@ -145,14 +147,14 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     }
   }
 
-  // 取消扫描（关闭扫描面板）
+  // 取消扫描（关闭扫描面板，释放预览 URL）
   const cancelScan = () => {
     if (scanTimerRef.current) {
       clearInterval(scanTimerRef.current)
       scanTimerRef.current = null
     }
     setScanning(false)
-    setScanPreview(null)
+    setScanPreviews([])
     setScanElapsed(0)
   }
 
@@ -191,13 +193,13 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     const newSkus = items.map((r) => toSku(r, labelToId))
     onChange(mode === 'replace' ? newSkus : [...skus, ...newSkus])
     setReview(null)
-    setScanPreview(null)
+    setScanPreviews([])
   }
 
   const pickImage = (files: FileList | null) => {
     if (!files) return
-    const img = Array.from(files).find((f) => f.type.startsWith('image/'))
-    if (img) handleImage(img)
+    const imgs = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    if (imgs.length > 0) handleImages(imgs)
   }
 
   // 全局拖入 / 粘贴监听
@@ -279,7 +281,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             <UploadCloud className="h-3.5 w-3.5 text-cyan-glow/70" />
             也可以直接把商品截图<b className="text-slate-600 font-medium">拖到页面任意位置</b>，或截图后按
             <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-[10px] font-mono">Ctrl+V</kbd>
-            粘贴识别
+            粘贴识别。
+            <span className="text-cyan-glow/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
           </p>
         </div>
 
@@ -299,6 +302,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <button
             onClick={() => fileRef.current?.click()}
             className="px-3 py-2 rounded-lg bg-gradient-to-r from-cyan-glow/20 to-sky-500/20 border border-cyan-glow/40 text-xs font-semibold text-cyan-glow hover:shadow-glow transition-all flex items-center gap-1.5"
+            title="支持一次选择多张截图（如不同 SKU 选择器页面），自动合并去重"
           >
             <ImagePlus className="h-3.5 w-3.5" /> AI 截图识别
           </button>
@@ -306,8 +310,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             ref={fileRef}
             type="file"
             accept="image/*"
+            multiple
             className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleImage(e.target.files[0])}
+            onChange={(e) => e.target.files && pickImage(e.target.files)}
           />
         </div>
       </div>
@@ -322,18 +327,31 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             exit={{ opacity: 0, height: 0 }}
             className="glass rounded-2xl p-4 flex items-center gap-4 overflow-hidden"
           >
-            {scanPreview && (
-              <div className="relative h-16 w-16 rounded-lg overflow-hidden border border-edge shrink-0">
-                <img src={scanPreview} alt="扫描" className="h-full w-full object-cover" />
-                <div className="absolute inset-0 bg-cyan-glow/10">
-                  <div className="absolute inset-x-0 h-0.5 bg-cyan-glow shadow-glow animate-[scan_1.2s_ease-in-out_infinite]" />
-                </div>
+            {scanPreviews.length > 0 && (
+              <div className="flex gap-1.5 shrink-0">
+                {scanPreviews.map((url, i) => (
+                  <div key={i} className="relative h-16 w-16 rounded-lg overflow-hidden border border-edge shrink-0">
+                    <img src={url} alt={`扫描 ${i + 1}`} className="h-full w-full object-cover" />
+                    <div className="absolute inset-0 bg-cyan-glow/10">
+                      <div className="absolute inset-x-0 h-0.5 bg-cyan-glow shadow-glow animate-[scan_1.2s_ease-in-out_infinite]" />
+                    </div>
+                    {scanPreviews.length > 1 && (
+                      <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
+                        {i + 1}
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 text-sm text-cyan-glow">
                 <Loader2 className="h-4 w-4 animate-spin shrink-0" />
-                <span>AI 正在识别图片中的所有规格与价格…</span>
+                <span>
+                  {scanPreviews.length > 1
+                    ? `AI 正在并发识别 ${scanPreviews.length} 张截图…`
+                    : 'AI 正在识别图片中的所有规格与价格…'}
+                </span>
               </div>
               <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-500">
                 <span className="tabular">已等待 <span className={scanElapsed > 30 ? 'text-amber-400 font-semibold' : 'text-cyan-glow'}>{scanElapsed}</span> 秒</span>
@@ -363,7 +381,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         {review && !scanning && (
           <RecognizeReview
             key="review"
-            image={review.image}
+            images={review.images}
             items={review.items}
             source={review.source}
             note={review.note}
@@ -372,7 +390,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             flavorLabel={review.flavorLabel}
             existingCount={skus.length}
             onConfirm={confirmImport}
-            onCancel={() => { setReview(null); setScanPreview(null) }}
+            onCancel={() => { setReview(null); setScanPreviews([]) }}
           />
         )}
       </AnimatePresence>

@@ -7,7 +7,8 @@ import { AlertCircle, Plus, Trash2, CheckCheck, RotateCcw, Info, Tag, Sliders } 
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface Props {
-  image: string
+  /** 单张或多张识别截图（批量识别时显示缩略图列表） */
+  images: string[]
   items: RecognizedSku[]
   source: 'api' | 'demo' | 'error'
   note?: string
@@ -35,8 +36,9 @@ const blank = (): RecognizedSku => ({
 })
 
 export default function RecognizeReview({
-  image, items, source, note, category, flavorLabel: aiFlavorLabel, dims, existingCount = 0, onConfirm, onCancel,
+  images, items, source, note, category, flavorLabel: aiFlavorLabel, dims, existingCount = 0, onConfirm, onCancel,
 }: Props) {
+  const isBatch = images.length > 1
   const [rows, setRows] = useState<RecognizedSku[]>(items)
   // 维度也可编辑（用户可改 label / 删除 / 加维度）
   const [dimRows, setDimRows] = useState<RecognizedDim[]>(dims ?? [])
@@ -120,15 +122,34 @@ export default function RecognizeReview({
     >
       {/* 头部 */}
       <div className="flex flex-col sm:flex-row gap-4 sm:items-start">
-        <div className="h-20 w-20 rounded-xl overflow-hidden border border-edge shrink-0">
-          <img src={image} alt="识别截图" className="h-full w-full object-cover" />
+        {/* 缩略图：单图直接显示，多图横排带序号角标 */}
+        <div className={`shrink-0 ${isBatch ? 'flex gap-1.5 max-w-[280px] overflow-x-auto' : 'h-20 w-20'}`}>
+          {images.map((img, i) => (
+            <div
+              key={i}
+              className={`relative rounded-xl overflow-hidden border border-edge shrink-0 ${isBatch ? 'h-16 w-16' : 'h-full w-full'}`}
+              title={`截图 ${i + 1}`}
+            >
+              <img src={img} alt={`识别截图 ${i + 1}`} className="h-full w-full object-cover" />
+              {isBatch && (
+                <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
+                  {i + 1}
+                </span>
+              )}
+            </div>
+          ))}
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-lg font-bold tracking-tight flex items-center gap-2 flex-wrap">
-            {source === 'error' ? '识别失败' : '确认识别结果'}
+            {source === 'error' ? '识别失败' : isBatch ? '批量识别结果' : '确认识别结果'}
             {source !== 'error' && (
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
                 {rows.length} 个规格
+              </span>
+            )}
+            {isBatch && source !== 'error' && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-500 font-semibold">
+                {images.length} 张图
               </span>
             )}
             {category && source !== 'error' && (
@@ -266,6 +287,14 @@ export default function RecognizeReview({
                     {/* 口味/型号/颜色（根据商品类型自适应） */}
                     <div className="flex items-center gap-1.5">
                       {low && <AlertCircle className="h-3.5 w-3.5 text-amber-400 shrink-0" />}
+                      {isBatch && r.sourceImage != null && (
+                        <span
+                          className="text-[9px] px-1 rounded bg-violet-500/20 text-violet-500 font-mono font-bold shrink-0"
+                          title={`来自截图 ${r.sourceImage + 1}`}
+                        >
+                          {r.sourceImage + 1}
+                        </span>
+                      )}
                       <input
                         value={flavor}
                         onChange={(e) => setNameParts(i, e.target.value, spec)}
