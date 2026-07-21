@@ -556,26 +556,34 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         {/* 分组折叠工具栏 */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
           <span className="text-[11px] text-slate-500">分组折叠：</span>
-          {(['flavor', 'quantity', 'packs'] as GroupBy[]).map((g) => {
-            const label = g === 'flavor' ? `按${flavorLabel}` : g === 'quantity' ? '按重量' : '按数量'
-            const active = groupBy === g
-            return (
-              <button
-                key={g}
-                onClick={() => {
-                  setCollapsed(new Set()) // 切换维度时重置折叠状态
-                  setGroupBy(active ? null : g)
-                }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                  active
-                    ? 'bg-cyan-glow/20 text-cyan-glow border border-cyan-glow/50'
-                    : 'text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
-                }`}
-              >
-                {label}
-              </button>
-            )
-          })}
+          {(() => {
+            // 动态构建分组选项：口味 + 规格（quantity+unit）+ 件数 + 各参数维度
+            const options: Array<{ key: string; label: string }> = [
+              { key: 'flavor', label: `按${flavorLabel}` },
+              { key: 'quantity', label: '按规格' },
+              { key: 'packs', label: '按件数' },
+              ...config.dims.map((d) => ({ key: `dim:${d.id}`, label: `按${d.label}` })),
+            ]
+            return options.map((opt) => {
+              const active = groupBy === opt.key
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => {
+                    setCollapsed(new Set())
+                    setGroupBy(active ? null : (opt.key as GroupBy))
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                    active
+                      ? 'bg-cyan-glow/20 text-cyan-glow border border-cyan-glow/50'
+                      : 'text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              )
+            })
+          })()}
           {groupBy && (
             <button
               onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}

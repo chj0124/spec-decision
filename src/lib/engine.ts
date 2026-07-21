@@ -540,7 +540,7 @@ export const fmt = {
 
 /* ============ 录入表格：口味拆分 + 分组折叠 ============ */
 
-export type GroupBy = 'flavor' | 'quantity' | 'packs'
+export type GroupBy = 'flavor' | 'quantity' | 'packs' | `dim:${string}`
 
 /**
  * 从规格名称拆出「口味」与「规格描述」。
@@ -560,9 +560,14 @@ export function groupSkus(skus: Sku[], by: GroupBy): Array<{ key: string; items:
   const map = new Map<string, Sku[]>()
   for (const s of skus) {
     let key = ''
-    if (by === 'flavor') key = parseFlavor(s.name).flavor || '（无口味）'
+    if (by === 'flavor') key = parseFlavor(s.name).flavor || '（无）'
     else if (by === 'quantity') key = `${s.quantity}${s.unit}`
-    else key = `${s.packs}件`
+    else if (by === 'packs') key = `${s.packs}件`
+    else if (by.startsWith('dim:')) {
+      // 按参数维度分组：key = dim:dimId → 取该 SKU 在该维度的值
+      const dimId = by.slice(4)
+      key = String(s.params?.[dimId] ?? '（未设）')
+    }
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(s)
   }
