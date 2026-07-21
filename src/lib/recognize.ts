@@ -192,6 +192,24 @@ function parseResult(raw: string): { items: RecognizedSku[]; dims: RecognizedDim
   }
 }
 
+/**
+ * 应被过滤的主观偏好词（口味/颜色/款式/香型等）。
+ * 这些是购买时的个人偏好，不影响性价比对比，不作为参数维度。
+ * AI 即使返回了也强制剔除。
+ */
+const SUBJECTIVE_KEYWORDS = [
+  '口味', '味道', '风味', '香型', '香味',
+  '颜色', '色彩', '配色',
+  '款式', '样式', '造型',
+  '图案', '花色', '花纹',
+  '品牌', '型号',
+]
+
+function isSubjectiveDim(label: string): boolean {
+  const s = label.trim()
+  return SUBJECTIVE_KEYWORDS.some((kw) => s === kw || s.includes(kw))
+}
+
 function parseDims(raw: any): RecognizedDim[] {
   if (!Array.isArray(raw)) return []
   const validTypes: ParamType[] = ['higher-better', 'lower-better', 'boolean', 'text']
@@ -199,6 +217,8 @@ function parseDims(raw: any): RecognizedDim[] {
     .map((d: any): RecognizedDim | null => {
       const label = String(d?.label ?? '').trim()
       if (!label) return null
+      // 强制过滤主观偏好维度（AI 可能仍会返回口味/颜色等）
+      if (isSubjectiveDim(label)) return null
       const type = validTypes.includes(d?.type) ? d.type : 'higher-better'
       const dim: RecognizedDim = { label, type }
       if (d?.unit) dim.unit = String(d.unit)
