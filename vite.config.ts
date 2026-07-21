@@ -1,6 +1,14 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// 关键：禁用 Node fetch 的系统代理读取。
+// 本机有 HTTPS_PROXY=http://127.0.0.1:7897（Clash），Node fetch 默认会走它，
+// 导致视觉请求（大 body）失败或超时。清空环境变量强制直连。
+delete process.env.HTTP_PROXY
+delete process.env.HTTPS_PROXY
+delete process.env.http_proxy
+delete process.env.https_proxy
+
 // AI 代理 plugin：dev 模式下绕过浏览器 CORS。
 // 浏览器 POST /api/ai-chat { baseUrl, apiKey, model, messages, temperature }
 // 由 vite dev server（Node 端）转发到真实服务商，响应原样返回。
