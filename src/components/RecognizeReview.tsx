@@ -13,6 +13,8 @@ interface Props {
   note?: string
   /** AI 识别到的商品类型，如"手机" */
   category?: string
+  /** AI 建议的"口味列"列名（如"口味"/"型号"/"颜色"），优先于本地推断 */
+  flavorLabel?: string
   /** AI 识别到的参数维度定义 */
   dims?: RecognizedDim[]
   /** 工作台已有规格数量；>0 时提供「替换/追加」两种导入方式 */
@@ -33,7 +35,7 @@ const blank = (): RecognizedSku => ({
 })
 
 export default function RecognizeReview({
-  image, items, source, note, category, dims, existingCount = 0, onConfirm, onCancel,
+  image, items, source, note, category, flavorLabel: aiFlavorLabel, dims, existingCount = 0, onConfirm, onCancel,
 }: Props) {
   const [rows, setRows] = useState<RecognizedSku[]>(items)
   // 维度也可编辑（用户可改 label / 删除 / 加维度）
@@ -104,7 +106,7 @@ export default function RecognizeReview({
   const lowCount = rows.filter((r) => r.confidence < LOW_CONFIDENCE).length
   const valid = rows.filter((r) => r.name.trim() && r.price > 0 && r.quantity > 0 && r.packs > 0)
   const hasDims = dimRows.length > 0
-  const flavorLabel = inferFlavorLabel(category)
+  const flavorLabel = aiFlavorLabel || inferFlavorLabel(category)
 
   // 动态列宽：基础字段占 12 列中的 11 列，每个 param 维度挤一点
   // 简化处理：param 维度多时整行改为可横向滚动

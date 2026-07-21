@@ -108,6 +108,8 @@ export interface DecisionConfig {
   budget?: number // 预算上限（preference=budget 时生效）
   /** 商品类型（由截图识别自动填入，如"零食"/"手机"/"五金螺丝"），用于自适应列名 */
   category?: string
+  /** AI 建议的"口味列"列名（如"口味"/"型号"/"颜色"），优先于 inferFlavorLabel */
+  flavorLabel?: string
 }
 
 export interface PresetField {

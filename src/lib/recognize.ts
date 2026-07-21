@@ -27,6 +27,8 @@ export interface RecognizeResult {
   items: RecognizedSku[]
   /** AI 识别出的商品类型，如 "零食" / "手机" / "洗护" */
   category?: string
+  /** AI 建议的"口味列"列名，如 "口味" / "型号" / "颜色" / "款式" */
+  flavorLabel?: string
   /** AI 识别出的参数维度定义（导入时会合并到 DecisionConfig.dims） */
   dims?: RecognizedDim[]
   /** 数据来源：真实模型 / 演示兜底 / 失败 */
@@ -77,7 +79,18 @@ export function toSku(r: RecognizedSku, labelToId?: Record<string, string>): Sku
 export const RECOGNIZE_PROMPT = `识别截图里所有商品 SKU 规格。直接输出 JSON，不要任何解释、推理或 markdown。
 
 输出格式：
-{"category":"商品类型","dims":[参数维度],"items":[规格列表]}
+{"category":"商品类型","flavorLabel":"列名","dims":[参数维度],"items":[规格列表]}
+
+字段说明：
+- category: 商品类型（如"零食"/"手机"/"五金螺丝"/"纸巾"）
+- flavorLabel: SKU 名称里第一个词的分类名。看截图里 SKU 名称的结构判断：
+  · 食品/零食/饮料 → "口味"（如"香辣味 16g×8袋" → 口味）
+  · 五金/螺丝/工具 → "型号"（如"M4×10mm 不锈钢" → 型号）
+  · 手机/数码/电子 → "颜色"或"版本"（如"8GB+256GB 黑色" → 颜色）
+  · 服装/鞋帽 → "款式"
+  · 洗护/美妆 → "香型"
+  · 纸巾/日用 → "规格"（若无独立的首词分类，填"规格"）
+  · 其他 → 根据该类商品的习惯叫法判断
 
 参数维度 dims（0-5个，仅包含用户购买该类商品时真正用于对比性价比的可量化参数；没有可量化参数时返回空数组 []）：
 - 必须是可量化或可评级的参数（如重量、容量、内存、电池容量、直径、长度、材质强度）
@@ -97,17 +110,17 @@ export const RECOGNIZE_PROMPT = `识别截图里所有商品 SKU 规格。直接
 - params: 对象，key=维度label，value=该SKU在该维度的值；无维度时省略或空对象
 - confidence: 把握 0-1
 
-示例（手机，有可量化维度）：
-{"category":"手机","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"电池容量":5000},"confidence":0.9}]}
+示例（手机）：
+{"category":"手机","flavorLabel":"颜色","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"电池容量":5000},"confidence":0.9}]}
 
-示例（零食，仅净含量可对比，口味进名称不进维度）：
-{"category":"零食","dims":[{"label":"净含量","type":"higher-better","unit":"g"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16},"confidence":0.95}]}
+示例（零食，口味进名称不进维度）：
+{"category":"零食","flavorLabel":"口味","dims":[{"label":"净含量","type":"higher-better","unit":"g"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16},"confidence":0.95}]}
 
 示例（螺丝，无可量化对比参数，dims 为空）：
-{"category":"五金螺丝","dims":[],"items":[{"name":"M4×10mm 不锈钢内六角","price":9.9,"quantity":1,"unit":"个","packs":100,"confidence":0.85}]}
+{"category":"五金螺丝","flavorLabel":"型号","dims":[],"items":[{"name":"M4×10mm 不锈钢内六角","price":9.9,"quantity":1,"unit":"个","packs":100,"confidence":0.85}]}
 
-示例（纸巾，规格即参数，无需额外维度）：
-{"category":"纸巾","dims":[],"items":[{"name":"3层120抽 抽纸","price":15.9,"quantity":120,"unit":"抽","packs":3,"confidence":0.9}]}
+示例（纸巾）：
+{"category":"纸巾","flavorLabel":"规格","dims":[],"items":[{"name":"3层120抽 抽纸","price":15.9,"quantity":120,"unit":"抽","packs":3,"confidence":0.9}]}
 
 只输出 JSON，不要其他文字。`
 
@@ -134,6 +147,7 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
       return {
         items: parsed.items,
         category: parsed.category,
+        flavorLabel: parsed.flavorLabel,
         dims: parsed.dims,
         source: 'api',
         note: `AI 识别为「${parsed.category ?? '商品'}」· ${parsed.items.length} 个规格 · ${parsed.dims.length} 个参数维度`,
@@ -176,7 +190,7 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
 }
 
 /** 容错解析：剥离 markdown 代码块，提取 JSON 对象，校验并归一化字段 */
-function parseResult(raw: string): { items: RecognizedSku[]; dims: RecognizedDim[]; category?: string } {
+function parseResult(raw: string): { items: RecognizedSku[]; dims: RecognizedDim[]; category?: string; flavorLabel?: string } {
   const cleaned = raw.replace(/```json|```/g, '').trim()
   // 优先匹配对象 { ... }
   const objMatch = cleaned.match(/\{[\s\S]*\}/)
@@ -184,9 +198,10 @@ function parseResult(raw: string): { items: RecognizedSku[]; dims: RecognizedDim
   try {
     const obj = JSON.parse(objMatch[0])
     const category = typeof obj?.category === 'string' ? obj.category : undefined
+    const flavorLabel = typeof obj?.flavorLabel === 'string' ? obj.flavorLabel : undefined
     const dims = parseDims(obj?.dims)
     const items = parseItems(obj?.items, dims)
-    return { items, dims, category }
+    return { items, dims, category, flavorLabel }
   } catch {
     return { items: [], dims: [] }
   }
@@ -278,6 +293,7 @@ function demoResult(note?: string): RecognizeResult {
   return {
     items,
     category: '手机',
+    flavorLabel: '颜色',
     dims,
     source: 'demo',
     note: note ?? '演示模式（未配置视觉模型）：示例 4 款手机规格 · 3 个参数维度。到「AI 设置」配一个视觉模型即可真实识别。',

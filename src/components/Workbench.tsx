@@ -180,11 +180,14 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       mergedDims.push({ id, label: d.label, type: d.type, weight: 20, unit: d.unit, levels: d.levels })
       labelToId[d.label] = id
     }
-    // category 仅在替换模式或尚未设置时更新（避免追加模式覆盖已有类型）
+    // category / flavorLabel 仅在替换模式或尚未设置时更新（避免追加模式覆盖已有类型）
     const nextCategory = mode === 'replace' || !config.category
       ? review?.category ?? config.category
       : config.category
-    onConfigChange({ ...config, dims: mergedDims, category: nextCategory })
+    const nextFlavorLabel = mode === 'replace' || !config.flavorLabel
+      ? review?.flavorLabel ?? config.flavorLabel
+      : config.flavorLabel
+    onConfigChange({ ...config, dims: mergedDims, category: nextCategory, flavorLabel: nextFlavorLabel })
     const newSkus = items.map((r) => toSku(r, labelToId))
     onChange(mode === 'replace' ? newSkus : [...skus, ...newSkus])
     setReview(null)
@@ -240,7 +243,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   }, [skus])
 
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
-  const flavorLabel = inferFlavorLabel(config.category)
+  const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
   return (
     <div className="space-y-6">
@@ -366,6 +369,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             note={review.note}
             dims={review.dims}
             category={review.category}
+            flavorLabel={review.flavorLabel}
             existingCount={skus.length}
             onConfirm={confirmImport}
             onCancel={() => { setReview(null); setScanPreview(null) }}
