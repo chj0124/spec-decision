@@ -1,15 +1,19 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
-export default defineConfig({
-  plugins: [react()],
-  base: './',
-  server: {
-    // AI 代理：dev 模式下绕过浏览器 CORS。
-    // 浏览器 POST /api/ai-chat { baseUrl, apiKey, model, messages, temperature }
-    // 由 vite dev server（Node 端）转发到真实服务商，响应原样返回。
+// AI 代理 plugin：dev 模式下绕过浏览器 CORS。
+// 浏览器 POST /api/ai-chat { baseUrl, apiKey, model, messages, temperature }
+// 由 vite dev server（Node 端）转发到真实服务商，响应原样返回。
+// 生产模式（Vercel）不走此代理，浏览器直连；若服务商不允许 CORS 需另配 Serverless。
+function aiProxyPlugin(): Plugin {
+  return {
+    name: 'ai-proxy',
     configureServer(server) {
-      server.middlewares.use('/api/ai-chat', async (req, res) => {
+      server.middlewares.use(async (req, res, next) => {
+        const url = req.url || ''
+        if (!url.startsWith('/api/ai-chat')) {
+          return next()
+        }
         if (req.method !== 'POST') {
           res.statusCode = 405
           res.end('Method Not Allowed')
@@ -30,7 +34,8 @@ export default defineConfig({
             return
           }
 
-          const upstream = await fetch(`${String(baseUrl).replace(/\/$/, '')}/chat/completions`, {
+          const targetUrl = `${String(baseUrl).replace(/\/$/, '')}/chat/completions`
+          const upstream = await fetch(targetUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -48,13 +53,19 @@ export default defineConfig({
           res.setHeader('Content-Type', 'application/json')
           res.end(text)
         } catch (e: any) {
+          console.error('[ai-proxy] error:', e?.message ?? e)
           res.statusCode = 502
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify({ error: e?.message ?? '上游请求失败' }))
         }
       })
     },
-  },
+  }
+}
+
+export default defineConfig({
+  plugins: [react(), aiProxyPlugin()],
+  base: './',
   build: {
     chunkSizeWarningLimit: 900,
     rollupOptions: {
