@@ -23,7 +23,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
 
   const applyPreset = (label: string) => {
     const p = AI_PRESETS.find((x) => x.label === label)
-    if (p) setForm({ ...form, baseUrl: p.baseUrl, model: p.model })
+    if (p) setForm({ ...form, baseUrl: p.baseUrl, model: p.model, visionModel: p.visionModel })
   }
 
   const test = async () => {
@@ -127,6 +127,21 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                   placeholder="deepseek-chat"
                   className="field text-xs font-mono"
                 />
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-slate-500 mb-1 block flex items-center gap-1">
+                  视觉模型 Vision Model
+                  <span className="text-[10px] text-slate-400">（用于截图识别，留空则用上面的 Model）</span>
+                </span>
+                <input
+                  value={form.visionModel ?? ''}
+                  onChange={(e) => setForm({ ...form, visionModel: e.target.value })}
+                  placeholder="qwen-vl-plus / glm-4v-flash / gpt-4o-mini"
+                  className="field text-xs font-mono"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  注意：DeepSeek 不支持视觉。请配通义 qwen-vl-plus / 智谱 glm-4v-flash / OpenAI gpt-4o-mini 等多模态模型。
+                </span>
               </label>
             </div>
 

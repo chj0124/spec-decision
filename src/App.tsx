@@ -5,7 +5,7 @@ import {
   loadSkus, saveSkus, loadTheme, saveTheme,
   loadConfig, saveConfig, migrateV1ToV2, sampleScene,
 } from './lib/store'
-import { loadAiConfig, saveAiConfig, isAiReady } from './lib/ai'
+import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
 import { useUnitNormalize } from './lib/useUnitNormalize'
 import { unitMixWarning } from './lib/engine'
@@ -49,6 +49,7 @@ export default function App() {
     [normalizedSkus, config],
   )
   const aiReady = isAiReady()
+  const visionReady = isVisionReady()
 
   // 加载示例场景时同步覆盖 skus + config
   const handleLoadScene = (scene: 'snack' | 'phone') => {
@@ -117,10 +118,10 @@ export default function App() {
               onClick={() => setSettingsOpen(true)}
               className="h-9 px-2.5 rounded-lg border border-edge flex items-center gap-1.5 text-slate-600 hover:text-cyan-glow hover:border-cyan-glow/50 transition-all"
               aria-label="AI 设置"
-              title="AI 服务配置"
+              title={`AI 服务配置${aiReady ? '（文本已就绪' : '（未配置'}${aiReady && visionReady ? ' + 视觉已就绪' : aiReady ? '，视觉未配置' : ''}）`}
             >
               <Settings className="h-4 w-4" />
-              <span className={`h-1.5 w-1.5 rounded-full ${aiReady ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${visionReady ? 'bg-emerald-500' : aiReady ? 'bg-amber-400' : 'bg-slate-300'}`} />
             </button>
 
             {/* 主题切换 */}

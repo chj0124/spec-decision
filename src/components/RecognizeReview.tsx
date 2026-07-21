@@ -8,7 +8,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 interface Props {
   image: string
   items: RecognizedSku[]
-  source: 'api' | 'demo'
+  source: 'api' | 'demo' | 'error'
   note?: string
   onConfirm: (items: RecognizedSku[]) => void
   onCancel: () => void
@@ -79,15 +79,33 @@ export default function RecognizeReview({ image, items, source, note, onConfirm,
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="text-lg font-bold tracking-tight flex items-center gap-2">
-            确认识别结果
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
-              {rows.length} 个规格
-            </span>
+            {source === 'error' ? '识别失败' : '确认识别结果'}
+            {source !== 'error' && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
+                {rows.length} 个规格
+              </span>
+            )}
           </h3>
-          <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
-            <Info className="h-3.5 w-3.5 shrink-0" />
-            {note ?? '请核对下方结果，可直接点击修改；改完一键导入'}
-          </p>
+          {source === 'error' ? (
+            <div className="mt-2 rounded-xl border border-red-400/40 bg-red-500/10 p-3 flex gap-2">
+              <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-red-600 mb-1">视觉模型调用失败</p>
+                <p className="text-[11px] text-red-500 leading-relaxed break-all">{note}</p>
+                <p className="text-[11px] text-slate-500 mt-2">
+                  请到「AI 设置」检查配置：
+                  <br />1. Base URL / API Key 是否正确
+                  <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-cyan-glow">qwen-vl-plus</code> / <code className="font-mono text-cyan-glow">glm-4v-flash</code> / <code className="font-mono text-cyan-glow">gpt-4o-mini</code>
+                  <br />3. DeepSeek 不支持视觉，需换其他服务商
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 mt-1 flex items-center gap-1.5">
+              <Info className="h-3.5 w-3.5 shrink-0" />
+              {note ?? '请核对下方结果，可直接点击修改；改完一键导入'}
+            </p>
+          )}
           {lowCount > 0 && (
             <p className="text-xs text-amber-400 mt-1.5 flex items-center gap-1.5">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
@@ -204,23 +222,30 @@ export default function RecognizeReview({ image, items, source, note, onConfirm,
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1 border-t border-edge">
         <p className="text-[11px] text-slate-500">
           {source === 'demo' && '当前为演示识别 · '}
-          有效 <span className="text-cyan-glow font-semibold tabular">{valid.length}</span> / {rows.length} 条
-          {valid.length !== rows.length && '（名称/价格/含量/件数 需填全）'}
+          {source !== 'error' && (
+            <>
+              有效 <span className="text-cyan-glow font-semibold tabular">{valid.length}</span> / {rows.length} 条
+              {valid.length !== rows.length && '（名称/价格/含量/件数 需填全）'}
+            </>
+          )}
+          {source === 'error' && '识别失败，请检查 AI 配置后重试'}
         </p>
         <div className="flex gap-2 w-full sm:w-auto">
           <button
             onClick={onCancel}
             className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl border border-edge text-sm text-slate-600 hover:border-slate-500 transition-all"
           >
-            取消
+            {source === 'error' ? '关闭' : '取消'}
           </button>
-          <button
-            onClick={() => onConfirm(valid)}
-            disabled={valid.length === 0}
-            className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
-          >
-            <CheckCheck className="h-4 w-4" /> 确认导入 {valid.length} 条
-          </button>
+          {source !== 'error' && (
+            <button
+              onClick={() => onConfirm(valid)}
+              disabled={valid.length === 0}
+              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
+            >
+              <CheckCheck className="h-4 w-4" /> 确认导入 {valid.length} 条
+            </button>
+          )}
         </div>
       </div>
     </motion.div>

@@ -1,5 +1,6 @@
 import type { Sku } from './types'
 import { uid } from './engine'
+import { isVisionReady, visionChat } from './ai'
 
 /** 识别出的单个规格（带置信度，供 UI 标记可疑项） */
 export interface RecognizedSku {
@@ -14,8 +15,8 @@ export interface RecognizedSku {
 
 export interface RecognizeResult {
   items: RecognizedSku[]
-  /** 数据来源：真实模型 / 演示兜底 */
-  source: 'api' | 'demo'
+  /** 数据来源：真实模型 / 演示兜底 / 失败 */
+  source: 'api' | 'demo' | 'error'
   /** 模型原始提示（如识别到的总数），便于向用户解释 */
   note?: string
 }
@@ -53,12 +54,42 @@ export const RECOGNIZE_PROMPT = `你是购物 App 截图的规格抽取器。请
 
 /**
  * 调用识别服务。
- * 生产路径：POST 到 Serverless 转发端点（密钥在服务端），返回结构化结果。
- * 未配置端点时：回退到演示数据，保证纯前端可跑通流程。
+ * - 若配置了视觉模型（AI 设置），走 visionChat 调真实多模态模型。
+ * - 未配置时回退到演示数据，保证纯前端可跑通流程。
+ * - 调用失败时显式返回 source='error' + 错误信息，不再静默回退 demo。
+ *
+ * 生产部署后也可走 VITE_RECOGNIZE_ENDPOINT Serverless 端点（兼容旧路径）。
  */
 export async function recognizeImage(file: File): Promise<RecognizeResult> {
-  const endpoint = import.meta.env.VITE_RECOGNIZE_ENDPOINT as string | undefined
+  // 1) 优先走用户在 AI 设置里配的视觉模型（dev 模式自动走 vite 代理）
+  if (isVisionReady()) {
+    try {
+      const base64 = await fileToBase64(file)
+      const raw = await visionChat(RECOGNIZE_PROMPT, base64, file.type || 'image/jpeg')
+      const items = parseItems(raw)
+      if (items.length === 0) {
+        return {
+          items: [],
+          source: 'error',
+          note: `模型未识别到任何规格。原始返回：${raw.slice(0, 200)}`,
+        }
+      }
+      return {
+        items,
+        source: 'api',
+        note: `AI 识别到 ${items.length} 个规格`,
+      }
+    } catch (err: any) {
+      return {
+        items: [],
+        source: 'error',
+        note: err?.message ?? '视觉模型调用失败',
+      }
+    }
+  }
 
+  // 2) 兼容旧的 VITE_RECOGNIZE_ENDPOINT Serverless 端点
+  const endpoint = import.meta.env.VITE_RECOGNIZE_ENDPOINT as string | undefined
   if (endpoint) {
     try {
       const base64 = await fileToBase64(file)
@@ -71,14 +102,41 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
       const data = (await resp.json()) as { items: RecognizedSku[]; note?: string }
       return { items: data.items ?? [], source: 'api', note: data.note }
     } catch (err) {
-      console.error('识别服务调用失败，回退演示数据：', err)
-      return demoResult('识别服务异常，已用演示数据兜底')
+      console.error('识别服务调用失败：', err)
+      return {
+        items: [],
+        source: 'error',
+        note: `识别服务异常：${err instanceof Error ? err.message : String(err)}`,
+      }
     }
   }
 
-  // 未配置真实端点 → 演示兜底（模拟 3口味×4款式 的全量识别）
+  // 3) 未配置任何识别能力 → 演示兜底（让用户能体验流程）
   await sleep(1500)
   return demoResult()
+}
+
+/** 容错解析：剥离 markdown 代码块，提取 JSON 数组，校验并归一化字段 */
+function parseItems(raw: string): RecognizedSku[] {
+  const cleaned = raw.replace(/```json|```/g, '').trim()
+  const match = cleaned.match(/\[[\s\S]*\]/)
+  if (!match) return []
+  try {
+    const arr = JSON.parse(match[0])
+    if (!Array.isArray(arr)) return []
+    return arr
+      .map((it: any): RecognizedSku => ({
+        name: String(it?.name ?? '').trim(),
+        price: Number(it?.price) || 0,
+        quantity: Number(it?.quantity) || 0,
+        unit: String(it?.unit ?? 'g'),
+        packs: Math.max(1, parseInt(it?.packs) || 1),
+        confidence: typeof it?.confidence === 'number' ? it.confidence : 0.8,
+      }))
+      .filter((it) => it.name && it.price > 0)
+  } catch {
+    return []
+  }
 }
 
 /** 演示兜底：模拟"3 口味 × 4 款式"共 12 个 SKU 的全量识别，含个别低置信度项 */
@@ -93,7 +151,6 @@ function demoResult(note?: string): RecognizeResult {
   const items: RecognizedSku[] = []
   for (const f of flavors) {
     for (const s of styles) {
-      // 故意让一两条置信度偏低，演示"待核对"高亮
       const low = f === '烧烤味' && s.packs === 16
       items.push({
         name: `${f} ${s.label}`,
@@ -108,7 +165,7 @@ function demoResult(note?: string): RecognizeResult {
   return {
     items,
     source: 'demo',
-    note: note ?? '演示模式：识别到 3 口味 × 4 款式共 12 个规格',
+    note: note ?? '演示模式（未配置视觉模型）：示例 3 口味 × 4 款式共 12 个规格。到「AI 设置」配一个视觉模型即可真实识别。',
   }
 }
 
