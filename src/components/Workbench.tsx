@@ -4,11 +4,12 @@ import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec } from '../lib/e
 import type { GroupBy } from '../lib/engine'
 import { recognizeImage, toSku } from '../lib/recognize'
 import type { RecognizeResult } from '../lib/recognize'
+import { loadAiConfig, getVisionModel } from '../lib/ai'
 import RecognizeReview from './RecognizeReview'
 import {
   Plus, Trash2, ImagePlus, Loader2,
   Cookie, Smartphone, ArrowRight, UploadCloud, ChevronDown,
-  Sliders, PieChart as PieIcon,
+  Sliders, PieChart as PieIcon, X,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
@@ -44,8 +45,10 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const [groupBy, setGroupBy] = useState<GroupBy | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [dimPanelOpen, setDimPanelOpen] = useState(true)
+  const [scanElapsed, setScanElapsed] = useState(0)
   const fileRef = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
+  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const toggleGroup = (key: string) =>
     setCollapsed((prev) => {
@@ -106,12 +109,30 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     setScanPreview(url)
     setScanning(true)
     setReview(null)
+    setScanElapsed(0)
+    // 启动计时器，每秒更新等待时长
+    scanTimerRef.current = setInterval(() => setScanElapsed((s) => s + 1), 1000)
     try {
       const result = await recognizeImage(file)
       setReview({ ...result, image: url })
     } finally {
+      if (scanTimerRef.current) {
+        clearInterval(scanTimerRef.current)
+        scanTimerRef.current = null
+      }
       setScanning(false)
     }
+  }
+
+  // 取消扫描（关闭扫描面板）
+  const cancelScan = () => {
+    if (scanTimerRef.current) {
+      clearInterval(scanTimerRef.current)
+      scanTimerRef.current = null
+    }
+    setScanning(false)
+    setScanPreview(null)
+    setScanElapsed(0)
   }
 
   // 确认导入：把修正后的识别结果并入工作台，同时合并维度到 config
@@ -274,10 +295,32 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                 </div>
               </div>
             )}
-            <div className="flex items-center gap-2 text-sm text-cyan-glow">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              AI 正在识别图片中的所有规格与价格…
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 text-sm text-cyan-glow">
+                <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                <span>AI 正在识别图片中的所有规格与价格…</span>
+              </div>
+              <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-500">
+                <span className="tabular">已等待 <span className={scanElapsed > 30 ? 'text-amber-400 font-semibold' : 'text-cyan-glow'}>{scanElapsed}</span> 秒</span>
+                {(() => {
+                  const ai = loadAiConfig()
+                  const vm = getVisionModel(ai)
+                  return ai.enabled && vm
+                    ? <span className="truncate">模型：<code className="font-mono text-slate-400">{vm}</code></span>
+                    : <span>演示模式（未配置视觉模型）</span>
+                })()}
+                {scanElapsed > 30 && (
+                  <span className="text-amber-400">· 视觉模型处理图片较慢，请耐心等待（90秒超时）</span>
+                )}
+              </div>
             </div>
+            <button
+              onClick={cancelScan}
+              className="px-3 py-1.5 rounded-lg border border-edge text-xs text-slate-500 hover:text-red-400 hover:border-red-400/50 transition-all inline-flex items-center gap-1.5 shrink-0"
+              title="取消识别"
+            >
+              <X className="h-3.5 w-3.5" /> 取消
+            </button>
             <style>{`@keyframes scan{0%,100%{top:0}50%{top:calc(100% - 2px)}}`}</style>
           </motion.div>
         )}

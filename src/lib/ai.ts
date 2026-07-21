@@ -69,11 +69,16 @@ async function requestChat(
   model: string,
   messages: any[],
   temperature = 0.1,
+  timeoutMs = 90000,
 ): Promise<string> {
   const isDev = import.meta.env.DEV
   const url = isDev
     ? '/api/ai-chat'
     : `${c.baseUrl.replace(/\/$/, '')}/chat/completions`
+
+  // 超时控制：视觉模型处理图片可能需要 10-30 秒，给 90 秒上限
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   let resp: Response
   try {
@@ -90,18 +95,25 @@ async function requestChat(
           ? { baseUrl: c.baseUrl, apiKey: c.apiKey, model, messages, temperature }
           : { model, messages, temperature },
       ),
+      signal: controller.signal,
     })
   } catch (e: any) {
+    clearTimeout(timer)
     const reason = e?.message ?? String(e)
+    // AbortError = 超时
+    if (e?.name === 'AbortError' || /abort/i.test(reason)) {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}秒未响应），可能是模型处理过慢或网络异常。请检查视觉模型是否正确，或重试。`)
+    }
     if (/failed to fetch|networkerror|load failed/i.test(reason)) {
       throw new Error(
         isDev
-          ? '本地代理请求失败（vite dev server 异常，请重启 npm run dev）。'
+          ? '本地代理请求失败（vite dev server 异常或上游网络不通，请检查 baseUrl 是否正确、代理是否拦截）。'
           : '网络请求失败（可能是 CORS 拦截、地址错误、或该服务商不允许浏览器直连）。',
       )
     }
     throw new Error(`网络请求失败：${reason}`)
   }
+  clearTimeout(timer)
   if (!resp.ok) {
     const t = await resp.text().catch(() => '')
     let detail = t
