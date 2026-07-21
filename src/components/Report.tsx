@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { DecisionResult, SkuCluster } from '../lib/types'
+import type { DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
 import { fmt } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
@@ -13,8 +13,11 @@ import {
 
 interface Props {
   result: DecisionResult
+  config: DecisionConfig
   unitWarning?: string | null
   onBack: () => void
+  onPreferenceChange: (p: Preference) => void
+  onBudgetChange: (budget: number | undefined) => void
 }
 
 const RANK_ICON = [Crown, Medal, Award]
@@ -28,7 +31,7 @@ const tooltipStyle = {
   color: '#e2e8f0',
 }
 
-export default function Report({ result, unitWarning, onBack }: Props) {
+export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
   // 有干扰维度（同定价多口味）时，默认用簇化简视图
   const [view, setView] = useState<'cluster' | 'full'>(hasVariants ? 'cluster' : 'full')
@@ -41,6 +44,14 @@ export default function Report({ result, unitWarning, onBack }: Props) {
     userToggled.current = true
     setView(v)
   }
+
+  // 雷达图维度：综合分 + 性价比 + 总量 + 各 ParamDim 维度分
+  const radarDims: { key: string; label: string }[] = [
+    { key: '__score', label: '综合分' },
+    { key: '__value', label: '性价比' },
+    { key: '__total', label: '总量' },
+    ...config.dims.map((d) => ({ key: d.id, label: d.label })),
+  ]
 
   if (items.length === 0) {
     return (
@@ -69,55 +80,84 @@ export default function Report({ result, unitWarning, onBack }: Props) {
 
   const chartItems = view === 'cluster' && clusters.length > 0 ? null : items
   const maxTotal = Math.max(...items.map((i) => i.totalQuantity), 1)
-  const radarData = chartItems
-    ? [
-        { dim: '综合分', ...Object.fromEntries(chartItems.map((i) => [i.name, i.score])) },
-        {
-          dim: '性价比',
-          ...Object.fromEntries(
-            chartItems.map((i) => {
-              const maxP = Math.max(...chartItems.map((x) => x.unitPrice), 1)
-              return [i.name, Math.round((1 - i.unitPrice / maxP) * 100)]
-            }),
-          ),
-        },
-        {
-          dim: '总量',
-          ...Object.fromEntries(chartItems.map((i) => [i.name, Math.round((i.totalQuantity / maxTotal) * 100)])),
-        },
-      ]
-    : // 簇视图：雷达图用簇
-      [
-        { dim: '综合分', ...Object.fromEntries(clusters.map((c) => [c.label, c.score])) },
-        {
-          dim: '性价比',
-          ...Object.fromEntries(
-            clusters.map((c) => {
-              const maxP = Math.max(...clusters.map((x) => x.repUnitPrice), 1)
-              return [c.label, Math.round((1 - c.repUnitPrice / maxP) * 100)]
-            }),
-          ),
-        },
-        {
-          dim: '总量',
-          ...Object.fromEntries(
-            clusters.map((c) => {
-              const maxT = Math.max(...clusters.map((x) => x.quantity * x.packs), 1)
-              return [c.label, Math.round(((c.quantity * c.packs) / maxT) * 100)]
-            }),
-          ),
-        },
-      ]
+
+  // 取某个 SKU/Cluster 在某维度的归一化分（0-100）
+  const getDimScore = (
+    source: typeof items[0] | (typeof clusters[0] extends { members: (infer M)[] } ? M : never),
+    key: string,
+  ): number => {
+    const it = source as { score: number; unitPrice: number; totalQuantity: number; dimScores?: Record<string, number> }
+    if (key === '__score') return Math.round(it.score)
+    if (key === '__value') {
+      const maxP = Math.max(...items.map((x) => x.unitPrice), 1)
+      return Math.round((1 - it.unitPrice / maxP) * 100)
+    }
+    if (key === '__total') return Math.round((it.totalQuantity / maxTotal) * 100)
+    return it.dimScores?.[key] ?? 0
+  }
+
+  const radarSubjects = view === 'cluster' && clusters.length > 0
+    ? clusters.map((c) => ({ name: c.label, ref: c.members[0] }))
+    : items.map((i) => ({ name: i.name, ref: i }))
+
+  const radarData = radarDims.map((d) => {
+    const row: Record<string, number | string> = { dim: d.label }
+    for (const s of radarSubjects) {
+      row[s.name] = getDimScore(s.ref, d.key)
+    }
+    return row
+  })
 
   return (
     <div className="space-y-8">
-      {/* 返回 */}
-      <button
-        onClick={onBack}
-        className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5"
-      >
-        <ArrowLeft className="h-4 w-4" /> 返回编辑
-      </button>
+      {/* 返回 + 决策偏好 */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <button
+          onClick={onBack}
+          className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5"
+        >
+          <ArrowLeft className="h-4 w-4" /> 返回编辑
+        </button>
+
+        {/* 决策偏好切换 */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] text-slate-500">决策偏好：</span>
+          <div className="flex rounded-lg border border-edge overflow-hidden">
+            {([
+              { key: 'value', label: '性价比优先' },
+              { key: 'score', label: '综合得分优先' },
+              { key: 'budget', label: '预算优先' },
+            ] as { key: Preference; label: string }[]).map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => onPreferenceChange(opt.key)}
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  config.preference === opt.key
+                    ? 'bg-cyan-glow/15 text-cyan-glow'
+                    : 'text-slate-400 hover:text-brand-deep'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {config.preference === 'budget' && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-500">预算</span>
+              <input
+                type="number"
+                min={0}
+                value={config.budget ?? ''}
+                onChange={(e) =>
+                  onBudgetChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
+                }
+                placeholder="¥"
+                className="field py-1 text-xs w-20 tabular"
+              />
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* 单位混杂警告 */}
       {unitWarning && (
@@ -410,8 +450,8 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
   const RankIcon = RANK_ICON[idx]
   // 默认选中簇内最省钱的成员
   const cheapest = cluster.members[0]
-  const [activeId, setActiveId] = useState(cheapest.id)
-  const active = cluster.members.find((m) => m.id === activeId) ?? cheapest
+  const [activeId, setActiveId] = useState<string>(cheapest?.id ?? '')
+  const active = cluster.members.find((m: { id: string }) => m.id === activeId) ?? cheapest
   const hasFlavors = cluster.members.length > 1
 
   return (
@@ -485,7 +525,7 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
             )}
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {cluster.members.map((m) => (
+            {cluster.members.map((m: { id: string; name: string; price: number; flavor?: string }) => (
               <button
                 key={m.id}
                 onClick={() => setActiveId(m.id)}

@@ -1,4 +1,14 @@
-import type { ComputedSku, DecisionResult, MarginInsight, Sku, SkuCluster } from './types'
+import type {
+  ComputedSku,
+  DecisionConfig,
+  DecisionResult,
+  MarginInsight,
+  ParamDim,
+  ParamValue,
+  Preference,
+  Sku,
+  SkuCluster,
+} from './types'
 
 const round = (n: number, d = 4) => {
   const p = Math.pow(10, d)
@@ -109,36 +119,99 @@ export function computeSku(s: Sku): ComputedSku {
   }
 }
 
+/** 把单个维度的原始取值归一化到 0-100 分 */
+function scoreDim(
+  dim: ParamDim,
+  value: ParamValue,
+  range: { min: number; max: number } | null,
+): number {
+  if (dim.type === 'boolean') {
+    // 兼容字符串 'yes'/'no' 与历史布尔值
+    return value === 'yes' || (typeof value === 'boolean' && value) ? 100 : 0
+  }
+  if (dim.type === 'text') {
+    const levels = dim.levels ?? []
+    if (levels.length === 0) return 50
+    const idx = levels.indexOf(String(value))
+    if (idx < 0) return 0
+    // 第 0 名得 100，最后一名得接近 0
+    return range && range.max > range.min
+      ? ((range.max - idx) / (range.max - range.min)) * 100
+      : 100 - (idx / Math.max(1, levels.length - 1)) * 100
+  }
+  // 数值型：higher-better / lower-better
+  if (typeof value !== 'number' || !range || range.max <= range.min) return 50
+  if (dim.type === 'higher-better') {
+    return ((value - range.min) / (range.max - range.min)) * 100
+  }
+  // lower-better
+  return ((range.max - value) / (range.max - range.min)) * 100
+}
+
 /**
- * 综合评分：
- *  - 价格维度（单价越低越好）占主导
- *  - 若设置了加分参数（如内存/电池），按权重并入综合分
- * 返回 0-100 分，越高越划算
+ * 多维度加权评分：
+ *  - 价格维度（单价越低越好）权重 = config.priceWeight
+ *  - 每个 ParamDim 按其 type 归一化到 0-100，再按 weight 加权
+ *  - 总权重 = priceWeight + ∑dim.weight，做归一化避免权重不等于 100 时失真
+ * 返回 0-100 分，越高越划算。
  */
-export function scoreItems(items: ComputedSku[]): ComputedSku[] {
+export function scoreItems(
+  items: ComputedSku[],
+  config: DecisionConfig,
+): ComputedSku[] {
   if (items.length === 0) return items
+
+  // 价格维度范围
   const prices = items.map((i) => i.unitPrice).filter((p) => p > 0)
   const minP = Math.min(...prices)
   const maxP = Math.max(...prices)
   const priceRange = maxP - minP || 1
 
-  const bonusVals = items.map((i) => i.bonusValue ?? 0)
-  const maxB = Math.max(...bonusVals, 0)
-  const minB = Math.min(...bonusVals, 0)
-  const bonusRange = maxB - minB || 1
+  // 各数值维度的取值范围（text 类型用索引范围）
+  const dimRanges = new Map<string, { min: number; max: number } | null>()
+  for (const dim of config.dims) {
+    if (dim.type === 'boolean') {
+      dimRanges.set(dim.id, null)
+      continue
+    }
+    if (dim.type === 'text') {
+      const levels = dim.levels ?? []
+      dimRanges.set(dim.id, { min: 0, max: Math.max(0, levels.length - 1) })
+      continue
+    }
+    const vals = items
+      .map((i) => i.params?.[dim.id])
+      .filter((v): v is number => typeof v === 'number' && !isNaN(v))
+    if (vals.length === 0) {
+      dimRanges.set(dim.id, null)
+      continue
+    }
+    dimRanges.set(dim.id, { min: Math.min(...vals), max: Math.max(...vals) })
+  }
 
-  const hasBonus = items.some((i) => (i.bonusWeight ?? 0) > 0 && i.bonusValue)
+  // 总权重（防 0）
+  const totalW =
+    Math.max(0, config.priceWeight) +
+    config.dims.reduce((s, d) => s + Math.max(0, d.weight), 0) || 1
 
   return items.map((i) => {
-    // 价格得分 0-100（单价越低分越高）
+    const dimScores: Record<string, number> = {}
+
+    // 价格分（0-100，越低越高）
     const priceScore = i.unitPrice > 0 ? ((maxP - i.unitPrice) / priceRange) * 100 : 0
-    let score = priceScore
-    if (hasBonus) {
-      const w = Math.min(100, Math.max(0, i.bonusWeight ?? 0)) / 100
-      const bonusScore = i.bonusValue ? ((i.bonusValue - minB) / bonusRange) * 100 : 0
-      score = priceScore * (1 - w) + bonusScore * w
+    dimScores['price'] = round(priceScore, 2)
+
+    let weightedSum = priceScore * (Math.max(0, config.priceWeight) / totalW)
+
+    for (const dim of config.dims) {
+      const v = i.params?.[dim.id]
+      const range = dimRanges.get(dim.id) ?? null
+      const s = scoreDim(dim, v, range)
+      dimScores[dim.id] = round(s, 2)
+      weightedSum += s * (Math.max(0, dim.weight) / totalW)
     }
-    return { ...i, score: round(score, 2) }
+
+    return { ...i, dimScores, score: round(weightedSum, 2) }
   })
 }
 
@@ -307,16 +380,33 @@ export function clusterItems(items: ComputedSku[]): SkuCluster[] {
     .map((c, idx) => ({ ...c, rank: idx + 1, isBest: idx === 0 }))
 }
 
-/** 主入口：输入原始 SKU 列表，输出完整决策结果 */
-export function decide(skus: Sku[]): DecisionResult {
-  const valid = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0)
-  const computed = valid.map(computeSku)
-  const scored = scoreItems(computed)
-  const sorted = [...scored].sort((a, b) => b.score - a.score).map((item, idx) => ({
+/** 按决策偏好排序，返回带 rank/isBest 的列表 */
+function rankByPreference(
+  scored: ComputedSku[],
+  preference: Preference,
+  budget?: number,
+): ComputedSku[] {
+  let pool = scored
+  if (preference === 'budget' && typeof budget === 'number' && budget > 0) {
+    pool = scored.filter((i) => i.price <= budget!)
+  }
+  const cmp =
+    preference === 'value'
+      ? (a: ComputedSku, b: ComputedSku) => a.unitPrice - b.unitPrice // 性价比优先
+      : (a: ComputedSku, b: ComputedSku) => b.score - a.score // 综合/预算优先均按 score
+  return [...pool].sort(cmp).map((item, idx) => ({
     ...item,
     rank: idx + 1,
     isBest: idx === 0,
   }))
+}
+
+/** 主入口：输入原始 SKU 列表 + 决策配置，输出完整决策结果 */
+export function decide(skus: Sku[], config: DecisionConfig): DecisionResult {
+  const valid = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0)
+  const computed = valid.map(computeSku)
+  const scored = scoreItems(computed, config)
+  const sorted = rankByPreference(scored, config.preference, config.budget)
 
   const best = sorted[0] ?? null
   const baseline =

@@ -1,4 +1,22 @@
 // 领域模型：一个可对比的商品规格 SKU
+
+/** 参数维度类型 */
+export type ParamType = 'higher-better' | 'lower-better' | 'boolean' | 'text'
+
+/** 参数维度定义（全局，跨所有 SKU 共享） */
+export interface ParamDim {
+  id: string
+  label: string // 维度名，如"电池容量"
+  type: ParamType
+  weight: number // 0-100
+  unit?: string // 单位提示，如 "mAh"
+  /** text 类型专用：评级序列，按从优到劣排列，如 ["A","B","C"] */
+  levels?: string[]
+}
+
+/** 单个 SKU 某维度的取值 */
+export type ParamValue = number | string | undefined
+
 export interface Sku {
   id: string
   name: string
@@ -6,19 +24,23 @@ export interface Sku {
   quantity: number // 单件含量数值（如 16）
   unit: string // 单件含量单位（如 g / ml / 个）
   packs: number // 件数 / 袋数（如 8 袋）
-  // 可选「越多越好」的加分参数（如 内存GB / 电池mAh / 评分）
+  // 旧版单 bonus 字段（保留用于向后兼容，新代码读 params）
   bonusLabel?: string
   bonusValue?: number
-  bonusWeight?: number // 0-100，加分项在综合分里的权重
+  bonusWeight?: number
+  /** 新：多维参数取值，key = ParamDim.id */
+  params?: Record<string, ParamValue>
 }
 
 export interface ComputedSku extends Sku {
   totalQuantity: number // 总量 = quantity * packs
   unitPrice: number // 每单位价格 = price / totalQuantity
-  bonusPerYuan?: number // 每元加分量
+  bonusPerYuan?: number // 每元加分量（旧字段，保留显示）
   score: number // 综合得分 0-100
   rank: number
   isBest: boolean
+  /** 每个维度的 0-100 归一化分（含价格维度 'price'） */
+  dimScores?: Record<string, number>
 }
 
 // 边际效益：以「基准（最便宜总量最小）」为参照，升级到大包装是否划算
@@ -67,6 +89,17 @@ export interface DecisionResult {
 }
 
 export type Theme = 'dark' | 'light'
+
+/** 决策偏好 */
+export type Preference = 'value' | 'score' | 'budget'
+
+/** 决策配置：参数维度 + 价格权重 + 偏好 */
+export interface DecisionConfig {
+  dims: ParamDim[] // 当前任务的参数维度列表
+  priceWeight: number // 价格维度自身权重（默认 50）
+  preference: Preference // 决策偏好
+  budget?: number // 预算上限（preference=budget 时生效）
+}
 
 export interface PresetField {
   key: string

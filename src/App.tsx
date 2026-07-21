@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Sku, Theme } from './lib/types'
+import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
-import { loadSkus, saveSkus, loadTheme, saveTheme } from './lib/store'
+import {
+  loadSkus, saveSkus, loadTheme, saveTheme,
+  loadConfig, saveConfig, migrateV1ToV2, sampleScene,
+} from './lib/store'
 import { loadAiConfig, saveAiConfig, isAiReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
 import { useUnitNormalize } from './lib/useUnitNormalize'
@@ -15,13 +18,17 @@ import { AnimatePresence, motion } from 'framer-motion'
 type Page = 'workbench' | 'report'
 
 export default function App() {
+  // 启动时先做 v1 → v2 一次性迁移（旧 bonus 字段 → params + dims）
+  const [boot] = useState(() => migrateV1ToV2())
   const [page, setPage] = useState<Page>('workbench')
-  const [skus, setSkus] = useState<Sku[]>(() => loadSkus())
+  const [skus, setSkus] = useState<Sku[]>(() => boot.skus)
+  const [config, setConfig] = useState<DecisionConfig>(() => boot.config)
   const [theme, setTheme] = useState<Theme>(() => loadTheme())
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => loadAiConfig())
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => saveSkus(skus), [skus])
+  useEffect(() => saveConfig(config), [config])
 
   useEffect(() => {
     saveTheme(theme)
@@ -37,8 +44,26 @@ export default function App() {
 
   // 生僻单位先经 AI 归一化（本地表已知则直接用，不耗 AI）
   const normalizedSkus = useUnitNormalize(skus)
-  const result = useMemo(() => decide(normalizedSkus), [normalizedSkus])
+  const result = useMemo(
+    () => decide(normalizedSkus, config),
+    [normalizedSkus, config],
+  )
   const aiReady = isAiReady()
+
+  // 加载示例场景时同步覆盖 skus + config
+  const handleLoadScene = (scene: 'snack' | 'phone') => {
+    const s = sampleScene(scene)
+    setSkus(s.skus)
+    setConfig(s.config)
+  }
+
+  // 切换偏好（报告页 segmented control 触发）
+  const handlePreferenceChange = (p: Preference) => {
+    setConfig((c) => ({ ...c, preference: p }))
+  }
+  const handleBudgetChange = (budget: number | undefined) => {
+    setConfig((c) => ({ ...c, budget }))
+  }
 
   return (
     <div className="min-h-[100dvh] grid-texture">
@@ -133,12 +158,18 @@ export default function App() {
                 skus={skus}
                 onChange={setSkus}
                 onGenerate={() => setPage('report')}
+                config={config}
+                onConfigChange={setConfig}
+                onLoadScene={handleLoadScene}
               />
             ) : (
               <Report
                 result={result}
+                config={config}
                 unitWarning={unitMixWarning(normalizedSkus)}
                 onBack={() => setPage('workbench')}
+                onPreferenceChange={handlePreferenceChange}
+                onBudgetChange={handleBudgetChange}
               />
             )}
           </motion.div>

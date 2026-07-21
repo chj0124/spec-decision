@@ -1,35 +1,49 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Sku } from '../lib/types'
+import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
-import { sampleSkus } from '../lib/store'
 import { recognizeImage, toSku } from '../lib/recognize'
 import type { RecognizeResult } from '../lib/recognize'
 import RecognizeReview from './RecognizeReview'
 import {
   Plus, Trash2, ImagePlus, Loader2,
   Cookie, Smartphone, ArrowRight, UploadCloud, ChevronDown,
+  Sliders, PieChart as PieIcon,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 
 interface Props {
   skus: Sku[]
   onChange: (s: Sku[]) => void
   onGenerate: () => void
+  config: DecisionConfig
+  onConfigChange: (c: DecisionConfig) => void
+  onLoadScene: (scene: 'snack' | 'phone') => void
 }
 
 const emptySku = (): Sku => ({
   id: uid(), name: '', price: 0, quantity: 0, unit: 'g', packs: 1,
-  bonusLabel: '', bonusValue: undefined, bonusWeight: 0,
 })
 
-export default function Workbench({ skus, onChange, onGenerate }: Props) {
+// 权重饼图调色板
+const PIE_COLORS = ['#16a34a', '#0ea5e9', '#f59e0b', '#a855f7', '#ef4444', '#14b8a6', '#ec4899']
+
+const PARAM_TYPE_LABELS: Record<ParamType, string> = {
+  'higher-better': '越大越好',
+  'lower-better': '越小越好',
+  'boolean': '是/否',
+  'text': '评级',
+}
+
+export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange, onLoadScene }: Props) {
   const [scanning, setScanning] = useState(false)
   const [scanPreview, setScanPreview] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const [review, setReview] = useState<(RecognizeResult & { image: string }) | null>(null)
   const [groupBy, setGroupBy] = useState<GroupBy | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [dimPanelOpen, setDimPanelOpen] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
 
@@ -44,9 +58,46 @@ export default function Workbench({ skus, onChange, onGenerate }: Props) {
   const update = (id: string, patch: Partial<Sku>) =>
     onChange(skus.map((s) => (s.id === id ? { ...s, ...patch } : s)))
 
+  /** 更新某个 SKU 的某个 param 维度值 */
+  const updateParam = (id: string, dimId: string, value: ParamValue) =>
+    onChange(skus.map((s) =>
+      s.id === id ? { ...s, params: { ...(s.params ?? {}), [dimId]: value } } : s,
+    ))
+
   const remove = (id: string) => onChange(skus.filter((s) => s.id !== id))
   const add = () => onChange([...skus, emptySku()])
-  const loadScene = (scene: 'snack' | 'phone') => onChange(sampleSkus(scene))
+  const loadScene = (scene: 'snack' | 'phone') => onLoadScene(scene)
+
+  // ============ 维度管理 ============
+  const addDim = () => {
+    const newDim: ParamDim = {
+      id: uid(),
+      label: '新维度',
+      type: 'higher-better',
+      weight: 20,
+    }
+    onConfigChange({ ...config, dims: [...config.dims, newDim] })
+  }
+  const updateDim = (id: string, patch: Partial<ParamDim>) =>
+    onConfigChange({
+      ...config,
+      dims: config.dims.map((d) => (d.id === id ? { ...d, ...patch } : d)),
+    })
+  const removeDim = (id: string) =>
+    onConfigChange({
+      ...config,
+      dims: config.dims.filter((d) => d.id !== id),
+    })
+
+  // 权重饼图数据：价格 + 所有维度
+  const pieData = [
+    { name: '价格', value: Math.max(0, config.priceWeight), color: PIE_COLORS[0] },
+    ...config.dims.map((d, i) => ({
+      name: d.label,
+      value: Math.max(0, d.weight),
+      color: PIE_COLORS[(i + 1) % PIE_COLORS.length],
+    })),
+  ].filter((d) => d.value > 0)
 
   // AI 截图识别：调用识别服务 → 进入确认环节（可修正）→ 确认后才导入
   const handleImage = async (file: File) => {
@@ -226,6 +277,178 @@ export default function Workbench({ skus, onChange, onGenerate }: Props) {
         )}
       </AnimatePresence>
 
+      {/* ============ 参数维度 + 权重面板 ============ */}
+      <div className="glass rounded-2xl overflow-hidden">
+        <button
+          onClick={() => setDimPanelOpen(!dimPanelOpen)}
+          className="w-full px-4 py-3 flex items-center justify-between text-left border-b border-edge bg-brand-soft/40 hover:bg-brand-soft/60 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Sliders className="h-4 w-4 text-cyan-glow" />
+            <span className="text-sm font-semibold">参数维度与权重</span>
+            <span className="text-[11px] text-slate-500">
+              {config.dims.length === 0
+                ? '（仅按价格比价，点击展开添加维度）'
+                : `共 ${config.dims.length} 个维度 + 价格`}
+            </span>
+          </div>
+          <ChevronDown
+            className={`h-4 w-4 text-slate-500 transition-transform ${dimPanelOpen ? '' : '-rotate-90'}`}
+          />
+        </button>
+
+        <AnimatePresence>
+          {dimPanelOpen && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="overflow-hidden"
+            >
+              <div className="flex flex-col lg:flex-row gap-4 p-4">
+                {/* 左：维度列表 */}
+                <div className="flex-1 space-y-2 min-w-0">
+                  {/* 价格维度（内置，不可删除） */}
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-brand-soft/30 border border-edge">
+                    <span className="text-xs font-mono text-slate-500 w-6">价格</span>
+                    <input
+                      value="每单位价格"
+                      disabled
+                      className="field py-1.5 text-xs flex-1 opacity-70"
+                    />
+                    <span className="text-[10px] text-slate-500 w-16 text-center">越小越好</span>
+                    <input
+                      type="range" min={0} max={100}
+                      value={config.priceWeight}
+                      onChange={(e) => onConfigChange({ ...config, priceWeight: parseInt(e.target.value) })}
+                      className="flex-1 min-w-[80px] accent-cyan-glow"
+                    />
+                    <span className="text-xs tabular text-cyan-glow w-8 text-right">{config.priceWeight}</span>
+                  </div>
+
+                  {/* 用户自定义维度 */}
+                  {config.dims.map((dim) => (
+                    <div key={dim.id} className="flex items-center gap-2 p-2 rounded-lg border border-edge hover:bg-brand-soft/30 transition-colors">
+                      <input
+                        value={dim.label}
+                        onChange={(e) => updateDim(dim.id, { label: e.target.value })}
+                        placeholder="维度名（如 电池容量）"
+                        className="field py-1.5 text-xs flex-1 min-w-0"
+                      />
+                      <input
+                        value={dim.unit ?? ''}
+                        onChange={(e) => updateDim(dim.id, { unit: e.target.value })}
+                        placeholder="单位"
+                        className="field py-1.5 text-xs w-14"
+                        title="单位（可选，如 mAh）"
+                      />
+                      <select
+                        value={dim.type}
+                        onChange={(e) => updateDim(dim.id, { type: e.target.value as ParamType })}
+                        className="field py-1.5 text-xs w-20"
+                        title="维度类型"
+                      >
+                        {Object.entries(PARAM_TYPE_LABELS).map(([v, l]) => (
+                          <option key={v} value={v}>{l}</option>
+                        ))}
+                      </select>
+                      {dim.type === 'text' && (
+                        <input
+                          value={(dim.levels ?? []).join(',')}
+                          onChange={(e) =>
+                            updateDim(dim.id, {
+                              levels: e.target.value
+                                .split(',')
+                                .map((s) => s.trim())
+                                .filter(Boolean),
+                            })
+                          }
+                          placeholder="A,B,C"
+                          className="field py-1.5 text-xs w-24"
+                          title="评级序列，从优到劣，用逗号分隔"
+                        />
+                      )}
+                      <input
+                        type="range" min={0} max={100}
+                        value={dim.weight}
+                        onChange={(e) => updateDim(dim.id, { weight: parseInt(e.target.value) })}
+                        className="flex-1 min-w-[80px] accent-cyan-glow"
+                      />
+                      <span className="text-xs tabular text-cyan-glow w-8 text-right">{dim.weight}</span>
+                      <button
+                        onClick={() => removeDim(dim.id)}
+                        className="text-slate-600 hover:text-red-400 transition-colors p-1"
+                        aria-label="删除维度"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+
+                  <button
+                    onClick={addDim}
+                    className="w-full py-2 text-xs text-slate-500 hover:text-cyan-glow hover:bg-brand-soft/40 rounded-lg transition-all flex items-center justify-center gap-1.5 border border-dashed border-edge"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> 新增参数维度
+                  </button>
+                </div>
+
+                {/* 右：权重饼图 */}
+                <div className="lg:w-64 shrink-0 flex flex-col items-center justify-center p-2">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
+                    <PieIcon className="h-3.5 w-3.5" /> 权重分布
+                  </div>
+                  {pieData.length > 0 ? (
+                    <div className="w-full h-44">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={pieData}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={70}
+                            innerRadius={36}
+                            paddingAngle={2}
+                          >
+                            {pieData.map((entry, idx) => (
+                              <Cell key={idx} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#0f1626',
+                              border: '1px solid #1c2740',
+                              borderRadius: '10px',
+                              fontSize: '12px',
+                              color: '#e2e8f0',
+                            }}
+                            formatter={(v: number) => `${v}`}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-44 grid place-items-center text-xs text-slate-500">
+                      所有权重为 0
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap gap-2 justify-center">
+                    {pieData.map((d, i) => (
+                      <span key={i} className="flex items-center gap-1 text-[10px] text-slate-500">
+                        <span className="h-2 w-2 rounded-sm" style={{ background: d.color }} />
+                        {d.name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
       {/* SKU 表格：拆口味列 + 可按 口味/重量/数量 分组折叠 */}
       <div className="glass rounded-2xl overflow-hidden">
         {/* 分组折叠工具栏 */}
@@ -275,7 +498,12 @@ export default function Workbench({ skus, onChange, onGenerate }: Props) {
                 <th className="px-3 py-3 font-medium w-24">单件含量</th>
                 <th className="px-3 py-3 font-medium w-16">单位</th>
                 <th className="px-3 py-3 font-medium w-20">数量</th>
-                <th className="px-3 py-3 font-medium w-32">加分参数</th>
+                {config.dims.map((dim) => (
+                  <th key={dim.id} className="px-3 py-3 font-medium w-24">
+                    {dim.label}
+                    {dim.unit && <span className="text-[10px] text-slate-500 ml-1">({dim.unit})</span>}
+                  </th>
+                ))}
                 <th className="px-3 py-3 font-medium w-24 text-right">总量</th>
                 <th className="px-3 py-3 font-medium w-32 text-right">每单位价</th>
                 <th className="px-3 py-3 font-medium w-10" />
@@ -297,7 +525,9 @@ export default function Workbench({ skus, onChange, onGenerate }: Props) {
                       isCollapsed={isCollapsed}
                       onToggle={() => toggleGroup(group.key)}
                       update={update}
+                      updateParam={updateParam}
                       remove={remove}
+                      dims={config.dims}
                     />
                   )
                 },
@@ -343,10 +573,14 @@ interface GroupRowsProps {
   isCollapsed: boolean
   onToggle: () => void
   update: (id: string, patch: Partial<Sku>) => void
+  updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
+  dims: ParamDim[]
 }
 
-function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, remove }: GroupRowsProps) {
+function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims }: GroupRowsProps) {
+  // 列数：# + 口味 + 规格 + 总价 + 含量 + 单位 + 数量 + N个维度 + 总量 + 单价 + 操作
+  const colCount = 10 + dims.length
   return (
     <>
       {/* 分组标题行（仅分组时显示） */}
@@ -355,7 +589,7 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
           onClick={onToggle}
           className="border-b border-edge bg-brand-soft/60 cursor-pointer hover:bg-brand-soft/70 transition-colors select-none"
         >
-          <td colSpan={11} className="px-3 py-2">
+          <td colSpan={colCount} className="px-3 py-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
               <ChevronDown
                 className={`h-3.5 w-3.5 text-cyan-glow transition-transform duration-200 ${
@@ -374,7 +608,16 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
         items.map((s) => {
           const idx = allSkus.findIndex((x) => x.id === s.id)
           return (
-            <RowFields key={s.id} s={s} idx={idx} update={update} remove={remove} indented={isGrouped} />
+            <RowFields
+              key={s.id}
+              s={s}
+              idx={idx}
+              update={update}
+              updateParam={updateParam}
+              remove={remove}
+              indented={isGrouped}
+              dims={dims}
+            />
           )
         })}
     </>
@@ -387,11 +630,13 @@ interface RowFieldsProps {
   s: Sku
   idx: number
   update: (id: string, patch: Partial<Sku>) => void
+  updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
   indented: boolean
+  dims: ParamDim[]
 }
 
-function RowFields({ s, idx, update, remove, indented }: RowFieldsProps) {
+function RowFields({ s, idx, update, updateParam, remove, indented, dims }: RowFieldsProps) {
   const total = s.quantity * Math.max(1, s.packs)
   const up = total > 0 && s.price > 0 ? s.price / total : 0
   const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
@@ -419,6 +664,51 @@ function RowFields({ s, idx, update, remove, indented }: RowFieldsProps) {
     const spec = buildSpec(next.quantity, next.unit, next.packs)
     const name = flavor.trim() ? `${flavor.trim()} ${spec}`.trim() : spec
     update(s.id, { [field]: value, name })
+  }
+
+  /** 渲染某个维度对应的输入控件 */
+  const renderDimInput = (dim: ParamDim) => {
+    const raw = s.params?.[dim.id]
+    if (dim.type === 'boolean') {
+      const boolValue = typeof raw === 'string' ? raw : (typeof raw === 'boolean' && raw ? 'yes' : 'no')
+      return (
+        <select
+          value={boolValue}
+          onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
+          className="field py-1.5 text-xs w-full"
+        >
+          <option value="no">否</option>
+          <option value="yes">是</option>
+        </select>
+      )
+    }
+    if (dim.type === 'text') {
+      const levels = dim.levels ?? []
+      return (
+        <select
+          value={typeof raw === 'string' ? raw : ''}
+          onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
+          className="field py-1.5 text-xs w-full"
+        >
+          <option value="">—</option>
+          {levels.map((lv) => (
+            <option key={lv} value={lv}>{lv}</option>
+          ))}
+        </select>
+      )
+    }
+    // 数值型：higher-better / lower-better
+    return (
+      <input
+        type="number"
+        value={typeof raw === 'number' ? raw : ''}
+        onChange={(e) =>
+          updateParam(s.id, dim.id, e.target.value === '' ? undefined : parseFloat(e.target.value))
+        }
+        placeholder={dim.unit ?? '0'}
+        className="field py-1.5 text-xs tabular w-full"
+      />
+    )
   }
 
   return (
@@ -487,30 +777,12 @@ function RowFields({ s, idx, update, remove, indented }: RowFieldsProps) {
           className="field py-1.5 text-xs tabular"
         />
       </td>
-      <td className="px-3 py-2">
-        <div className="flex gap-1">
-          <input
-            value={s.bonusLabel ?? ''}
-            onChange={(e) => update(s.id, { bonusLabel: e.target.value })}
-            placeholder="参数名" className="field py-1.5 text-xs flex-1 min-w-0"
-            title="加分参数名（选填，如 电池mAh）"
-          />
-          <input
-            type="number" value={s.bonusValue ?? ''}
-            onChange={(e) =>
-              update(s.id, { bonusValue: e.target.value ? parseFloat(e.target.value) : undefined })
-            }
-            placeholder="值" className="field py-1.5 text-xs w-14 tabular"
-            title="参数数值"
-          />
-          <input
-            type="number" min={0} max={100} value={s.bonusWeight ?? 0}
-            onChange={(e) => update(s.id, { bonusWeight: parseInt(e.target.value) || 0 })}
-            placeholder="权" className="field py-1.5 text-xs w-12 tabular"
-            title="权重 0-100"
-          />
-        </div>
-      </td>
+      {/* 动态维度列 */}
+      {dims.map((dim) => (
+        <td key={dim.id} className="px-3 py-2">
+          {renderDimInput(dim)}
+        </td>
+      ))}
       <td className="px-3 py-2 text-right text-xs text-slate-400 tabular whitespace-nowrap">
         {total > 0 ? `${fmt.num(total)}${s.unit}` : '—'}
       </td>
