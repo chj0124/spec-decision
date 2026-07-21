@@ -62,41 +62,52 @@ export function toSku(r: RecognizedSku, labelToId?: Record<string, string>): Sku
 /**
  * 自适应抽取 prompt：让模型自己判断商品类型，并识别该类型商品的关键参数维度。
  *
- * 返回 JSON 结构（非数组）：
+ * 关键设计：
+ * - 维度必须是"用户购买该类商品时真正用于对比性价比"的可量化参数
+ * - 口味/颜色/款式等主观偏好不作为维度（它们只影响名称，不影响性价比）
+ * - 若商品没有可量化的对比参数（如螺丝），dims 返回空数组 []
+ *
+ * 返回 JSON 结构：
  * {
- *   "category": "零食|手机|洗护|数码|...",
+ *   "category": "零食|手机|五金|...",
  *   "dims": [{"label":"电池容量","type":"higher-better","unit":"mAh"}, ...],
  *   "items": [{"name":"...","price":...,"quantity":...,"unit":"...","packs":...,"params":{"电池容量":5000},"confidence":0.9}]
  * }
- *
- * 关键：模型自适应，不预设维度。食品可能识别"重量/口味"，数码识别"内存/电池/屏幕"。
- * 优化：要求直接输出 JSON，不要解释、不要推理，减少响应时间。
  */
 export const RECOGNIZE_PROMPT = `识别截图里所有商品 SKU 规格。直接输出 JSON，不要任何解释、推理或 markdown。
 
 输出格式：
-{"category":"商品类型","dims":[维度定义],"items":[规格列表]}
+{"category":"商品类型","dims":[参数维度],"items":[规格列表]}
 
-维度定义 dims（2-5个，用户买这类商品时真正关心的参数，不要把价格/名称作为维度）：
+参数维度 dims（0-5个，仅包含用户购买该类商品时真正用于对比性价比的可量化参数；没有可量化参数时返回空数组 []）：
+- 必须是可量化或可评级的参数（如重量、容量、内存、电池容量、直径、长度、材质强度）
+- 禁止把口味/颜色/款式/香型等主观偏好作为维度（它们只影响名称，不影响性价比）
+- 禁止把价格/名称/品牌作为维度
 - label: 维度名
 - type: "higher-better"|"lower-better"|"boolean"|"text"
 - unit: 单位（可选）
 - levels: 仅 text 类型需要，按从优到劣排列
 
 规格列表 items（每个 SKU）：
-- name: 规格名称
+- name: 规格名称（含口味/颜色等偏好属性，如"香辣味 16g×8袋"）
 - price: 总价（元，纯数字）
-- quantity: 单件含量数值（数码产品填1）
-- unit: 单位（g/ml/个/GB等）
-- packs: 件数（数码产品填1）
-- params: 对象，key=维度label，value=该SKU在该维度的值
+- quantity: 单件含量数值（数码/五金等计件商品填1）
+- unit: 单位（g/ml/个/GB/mm等）
+- packs: 件数（计件商品填1）
+- params: 对象，key=维度label，value=该SKU在该维度的值；无维度时省略或空对象
 - confidence: 把握 0-1
 
-示例（手机）：
+示例（手机，有可量化维度）：
 {"category":"手机","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"电池容量":5000},"confidence":0.9}]}
 
-示例（零食）：
+示例（零食，仅净含量可对比，口味进名称不进维度）：
 {"category":"零食","dims":[{"label":"净含量","type":"higher-better","unit":"g"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16},"confidence":0.95}]}
+
+示例（螺丝，无可量化对比参数，dims 为空）：
+{"category":"五金螺丝","dims":[],"items":[{"name":"M4×10mm 不锈钢内六角","price":9.9,"quantity":1,"unit":"个","packs":100,"confidence":0.85}]}
+
+示例（纸巾，规格即参数，无需额外维度）：
+{"category":"纸巾","dims":[],"items":[{"name":"3层120抽 抽纸","price":15.9,"quantity":120,"unit":"抽","packs":3,"confidence":0.9}]}
 
 只输出 JSON，不要其他文字。`
 

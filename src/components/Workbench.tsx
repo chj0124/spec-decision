@@ -102,6 +102,19 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     })),
   ].filter((d) => d.value > 0)
 
+  // 语音播报（Web Speech API）：识别完成/失败时提示用户
+  const speak = (text: string) => {
+    try {
+      const synth = window.speechSynthesis
+      if (!synth) return
+      synth.cancel()
+      const u = new SpeechSynthesisUtterance(text)
+      u.lang = 'zh-CN'
+      u.rate = 1.15
+      synth.speak(u)
+    } catch { /* 静默失败 */ }
+  }
+
   // AI 截图识别：调用识别服务 → 进入确认环节（可修正）→ 确认后才导入
   const handleImage = async (file: File) => {
     if (!file.type.startsWith('image/')) return
@@ -115,6 +128,14 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     try {
       const result = await recognizeImage(file)
       setReview({ ...result, image: url })
+      // 语音提示识别结果
+      if (result.source === 'error') {
+        speak('识别失败，请检查截图或重试')
+      } else if (result.items.length > 0) {
+        speak(`识别完成，识别到${result.items.length}个规格`)
+      } else {
+        speak('识别完成，但未识别到规格')
+      }
     } finally {
       if (scanTimerRef.current) {
         clearInterval(scanTimerRef.current)
