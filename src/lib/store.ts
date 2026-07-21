@@ -137,7 +137,7 @@ export function sampleScene(scene: 'snack' | 'phone'): {
     }
     return {
       skus: out,
-      config: { ...DEFAULT_CONFIG },
+      config: { ...DEFAULT_CONFIG, category: '零食', flavorLabel: '口味' },
     }
   }
   // 手机场景：多维参数演示
@@ -185,6 +185,8 @@ export function sampleScene(scene: 'snack' | 'phone'): {
       dims: [dimBattery, dimScreen, dimWeight],
       priceWeight: 50,
       preference: 'score',
+      category: '手机',
+      flavorLabel: '版本',
     },
   }
 }

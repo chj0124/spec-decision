@@ -557,13 +557,26 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
           <span className="text-[11px] text-slate-500">分组折叠：</span>
           {(() => {
-            // 动态构建分组选项：口味 + 规格（quantity+unit）+ 件数 + 各参数维度
-            const options: Array<{ key: string; label: string }> = [
-              { key: 'flavor', label: `按${flavorLabel}` },
-              { key: 'quantity', label: '按规格' },
-              { key: 'packs', label: '按件数' },
-              ...config.dims.map((d) => ({ key: `dim:${d.id}`, label: `按${d.label}` })),
+            // 动态构建分组选项，并过滤掉无区分意义的（所有 SKU 在该维度值相同）
+            const allOptions: Array<{ key: string; label: string; getValue: (s: Sku) => string }> = [
+              { key: 'flavor', label: `按${flavorLabel}`, getValue: (s) => parseFlavor(s.name).flavor || '（无）' },
+              { key: 'quantity', label: '按规格', getValue: (s) => `${s.quantity}${s.unit}` },
+              { key: 'packs', label: '按件数', getValue: (s) => `${s.packs}件` },
+              ...config.dims.map((d): { key: string; label: string; getValue: (s: Sku) => string } => ({
+                key: `dim:${d.id}`,
+                label: `按${d.label}`,
+                getValue: (s) => String(s.params?.[d.id] ?? '（未设）'),
+              })),
             ]
+            // 只保留"能真正聚合成组"的维度：
+            // 1) 至少 2 个不同值（否则只有 1 组=无分组意义）
+            // 2) 去重后值数量 < SKU 总数（否则每组只有 1 个 SKU=只是排序不是分组）
+            const options = allOptions.filter((opt) => {
+              if (skus.length < 3) return false
+              const values = new Set(skus.map(opt.getValue))
+              return values.size > 1 && values.size < skus.length
+            })
+            if (options.length === 0) return null
             return options.map((opt) => {
               const active = groupBy === opt.key
               return (
