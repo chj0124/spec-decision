@@ -35,6 +35,7 @@ export interface Sku {
 export interface ComputedSku extends Sku {
   totalQuantity: number // 总量 = quantity * packs
   unitPrice: number // 每单位价格 = price / totalQuantity
+  packPrice: number // 每包价格 = price / packs（"包"指件/袋，对消费者比每g更直观）
   bonusPerYuan?: number // 每元加分量（旧字段，保留显示）
   score: number // 综合得分 0-100
   rank: number

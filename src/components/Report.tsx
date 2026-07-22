@@ -1,7 +1,6 @@
 ﻿import { useEffect, useRef, useState } from 'react'
-import type { DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt, mergeVariantSkus, parseFlavor } from '../lib/engine'
-import { chat, isAiReady } from '../lib/ai'
+import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
+import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
@@ -35,16 +34,49 @@ const tooltipStyle = {
 const tooltipLabelStyle = { color: '#e2e8f0', marginBottom: '4px' }
 const tooltipItemStyle = { color: '#e2e8f0' }
 
-/** 边际效益分级样式映射 */
-const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string }> = {
-  great: { label: '闭眼入', badge: 'bg-cyan-glow/15 text-cyan-glow', dot: 'bg-cyan-glow' },
-  good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-400',     dot: 'bg-sky-400' },
-  fair:  { label: '持平',   badge: 'bg-slate-500/20 text-slate-300', dot: 'bg-slate-400' },
-  poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-400', dot: 'bg-amber-400' },
-  bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-400',     dot: 'bg-red-400' },
+/** 边际效益分级样式映射：row=行底色弱高亮，bar=左侧色条颜色（inline style 用） */
+const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; row: string; bar: string }> = {
+  great: { label: '闭眼入', badge: 'bg-cyan-glow/15 text-cyan-glow', dot: 'bg-cyan-glow', row: 'bg-cyan-glow/5',  bar: '#06b6d4' },
+  good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-400',     dot: 'bg-sky-400',     row: 'bg-sky-500/5',    bar: '#0ea5e9' },
+  fair:  { label: '持平',   badge: 'bg-slate-500/20 text-slate-300', dot: 'bg-slate-400',   row: '',                bar: '#64748b' },
+  poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-400', dot: 'bg-amber-400',   row: 'bg-amber-500/5',  bar: '#f59e0b' },
+  bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-400',     dot: 'bg-red-400',     row: 'bg-red-500/5',    bar: '#ef4444' },
 }
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6
+
+/** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致 */
+const FLAVOR_COLORS = [
+  'bg-sky-900/20',
+  'bg-amber-900/20',
+  'bg-emerald-900/20',
+  'bg-violet-900/20',
+  'bg-rose-900/20',
+  'bg-cyan-900/20',
+  'bg-orange-900/20',
+  'bg-teal-900/20',
+]
+
+/** 全量视图分组维度选项 key 类型 */
+type FullGroupBy = 'flavor' | 'quantity' | 'packs'
+
+/** 按 dimension 对 ComputedSku 分组（保留派生字段，避免丢 packPrice 等） */
+function groupComputedSkus(
+  skus: ComputedSku[],
+  by: FullGroupBy,
+  flavorLabel: string,
+): Array<{ key: string; items: ComputedSku[] }> {
+  const map = new Map<string, ComputedSku[]>()
+  for (const s of skus) {
+    let key = ''
+    if (by === 'flavor') key = parseFlavor(s.name).flavor || `（无${flavorLabel}）`
+    else if (by === 'quantity') key = `${s.quantity}${s.unit}`
+    else if (by === 'packs') key = `${s.packs}件`
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(s)
+  }
+  return [...map.entries()].map(([key, items]) => ({ key, items }))
+}
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
@@ -60,45 +92,42 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     setView(v)
   }
 
-  // AI 边际效益表述：让配置的 AI 模型为每条边际分析生成简明扼要的"省/亏"维度说明
-  // AI 不可用或调用失败时回退到本地 netSaving 表述
-  const [aiVerdicts, setAiVerdicts] = useState<Record<string, string>>({})
-  const [aiVerdictsLoading, setAiVerdictsLoading] = useState(false)
-  useEffect(() => {
-    if (margins.length === 0 || !isAiReady()) return
-    let cancelled = false
-    setAiVerdictsLoading(true)
-    setAiVerdicts({})
-    // 构造数据给 AI：每条含目标规格、多花、多得、单价变化、净省
-    const payload = margins.map((m) => ({
-      toId: m.toId,
-      toName: m.toName,
-      fromName: m.fromName,
-      extraCost: m.extraCost,
-      extraQuantity: m.extraQuantity,
-      unit: m.unit,
-      priceDropPct: m.unitPriceDropPct,
-      netSaving: m.netSaving,
-    }))
-    const sys = '你是比价决策助手。用户给你相邻规格档位的对比数据，你为每条生成一句简明扼要的"省/亏"维度说明（不超过15字），用最直观的方式表达这一档值不值。例如：买大包每袋省0.3元、白赚2块钱的量、亏1.5元不如买小包、相当于打8折、加量不加价等。只返回 JSON 数组，每项 {toId, verdict}。'
-    chat(
-      `规格对比数据：\n${JSON.stringify(payload, null, 2)}\n\n请为每条生成 verdict。`,
-      sys,
-    )
-      .then((reply) => {
-        if (cancelled) return
-        // 提取 JSON 数组（兼容 AI 可能加 markdown 代码块）
-        const match = reply.match(/\[[\s\S]*\]/)
-        if (!match) throw new Error('parse')
-        const arr = JSON.parse(match[0]) as Array<{ toId: string; verdict: string }>
-        const map: Record<string, string> = {}
-        for (const item of arr) map[item.toId] = item.verdict
-        setAiVerdicts(map)
+  // 全量视图分组折叠：与工作台一致的工具栏 + 可点击分组标题行
+  const [groupBy, setGroupBy] = useState<FullGroupBy | null>(null)
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const toggleGroup = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
+  // 口味分组底色：按 flavor 值稳定映射到调色板
+  const flavorColorMap = new Map<string, string>()
+  let flavorColorIdx = 0
+  for (const it of items) {
+    const f = parseFlavor(it.name).flavor || ''
+    if (f && !flavorColorMap.has(f)) {
+      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
+      flavorColorIdx++
+    }
+  }
+  // 分组维度候选：过滤掉无区分意义的（所有 SKU 值相同 / 每组仅1项）
+  const groupOptions: Array<{ key: FullGroupBy; label: string }> = (() => {
+    if (items.length < 3) return []
+    const opts: Array<{ key: FullGroupBy; label: string; getVal: (s: ComputedSku) => string }> = [
+      { key: 'flavor', label: `按${flavorLabel}`, getVal: (s) => parseFlavor(s.name).flavor || '' },
+      { key: 'quantity', label: '按单件含量', getVal: (s) => `${s.quantity}${s.unit}` },
+      { key: 'packs', label: '按件数', getVal: (s) => `${s.packs}件` },
+    ]
+    return opts
+      .filter((o) => {
+        const vals = new Set(items.map(o.getVal))
+        return vals.size >= 2 && vals.size < items.length
       })
-      .catch(() => { /* AI 失败静默回退到本地表述 */ })
-      .finally(() => { if (!cancelled) setAiVerdictsLoading(false) })
-    return () => { cancelled = true }
-  }, [margins])
+      .map(({ key, label }) => ({ key, label }))
+  })()
 
   if (items.length === 0) {
     return (
@@ -203,6 +232,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     </div>
                   </div>
                   <div>
+                    <div className="text-sm text-slate-400 mb-0.5">每包价格</div>
+                    <div className="text-2xl font-bold tabular">{fmt.yuan(best.packPrice)}</div>
+                  </div>
+                  <div>
                     <div className="text-sm text-slate-400 mb-0.5">综合得分</div>
                     <div className="text-2xl font-bold tabular">{best.score.toFixed(1)}</div>
                   </div>
@@ -237,6 +270,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </motion.section>
       )}
 
+      {/* 排名 + 边际效益：大屏左右分栏 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
       {/* 排名（支持簇化简 / 全量切换） */}
       <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
@@ -276,62 +311,78 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               ))}
             </>
           ) : (
-            items.map((item, idx) => {
-              const RankIcon = RANK_ICON[idx]
-              return (
-                <motion.div
-                  key={item.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.06 }}
-                  className={`glass rounded-2xl p-4 flex items-center gap-4 ${
-                    item.isBest ? 'ring-1 ring-cyan-glow/50 shadow-glow' : ''
-                  }`}
-                >
-                  <div
-                    className={`h-11 w-11 rounded-xl grid place-items-center shrink-0 font-bold text-white ${
-                      RANK_STYLE[idx] ?? 'bg-edge text-slate-600'
-                    }`}
-                  >
-                    {RankIcon ? <RankIcon className="h-5 w-5" /> : (
-                      <span className="tabular">{item.rank}</span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-sm truncate">{item.name}</span>
-                      {item.isBest && (
-                        <span className="text-sm px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
-                          推荐
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-sm text-slate-500 mt-0.5 tabular">
-                      {fmt.yuan(item.price)} · {fmt.num(item.totalQuantity)}{item.unit}
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-base font-bold text-cyan-glow tabular">
-                      {fmt.priceUnit(item.unitPrice)}
-                    </div>
-                    <div className="text-sm text-slate-500">/{item.unit}</div>
-                  </div>
-                  <div className="hidden sm:block w-24 shrink-0">
-                    <div className="text-sm text-slate-500 mb-1 text-right tabular">
-                      {item.score.toFixed(0)}分
-                    </div>
-                    <div className="h-1.5 rounded-full bg-edge overflow-hidden">
-                      <motion.div
-                        initial={{ width: 0 }}
-                        animate={{ width: `${item.score}%` }}
-                        transition={{ duration: 0.8, delay: 0.2 + idx * 0.06, ease: [0.16, 1, 0.3, 1] }}
-                        className="h-full rounded-full bg-gradient-to-r from-brand to-emerald-600"
-                      />
-                    </div>
-                  </div>
-                </motion.div>
-              )
-            })
+            <>
+              {/* 分组折叠工具栏：仅当存在可分组维度时显示 */}
+              {groupOptions.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap text-xs">
+                  <span className="text-slate-500">分组折叠：</span>
+                  {groupOptions.map((opt) => {
+                    const active = groupBy === opt.key
+                    return (
+                      <button
+                        key={opt.key}
+                        onClick={() => {
+                          setCollapsed(new Set())
+                          setGroupBy(active ? null : opt.key)
+                        }}
+                        className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                          active
+                            ? 'bg-cyan-glow/15 text-cyan-glow border border-cyan-glow/50'
+                            : 'text-slate-400 hover:text-brand-deep border border-edge'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    )
+                  })}
+                  {groupBy && (
+                    <button
+                      onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}
+                      className="text-slate-500 hover:text-slate-600 ml-1"
+                    >
+                      取消分组
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs min-w-[640px]">
+                  <thead>
+                    <tr className="border-b border-edge text-left text-sm text-slate-500">
+                      <th className="px-2 py-2 font-medium text-center">#</th>
+                      <th className="px-2 py-2 font-medium">规格</th>
+                      <th className="px-2 py-2 font-medium text-right">总价</th>
+                      <th className="px-2 py-2 font-medium text-right">总量</th>
+                      <th className="px-2 py-2 font-medium text-right">每{items[0]?.unit ?? ''}</th>
+                      <th className="px-2 py-2 font-medium text-right">每包</th>
+                    </tr>
+                  </thead>
+                  {/* key 随 groupBy 变化，切换分组维度时整体重挂载 */}
+                  <tbody key={groupBy ?? 'none'}>
+                    {(groupBy
+                      ? groupComputedSkus(items, groupBy, flavorLabel)
+                      : [{ key: '__all__', items }]
+                    ).map((group) => {
+                      const isGrouped = groupBy !== null
+                      const isCollapsed = collapsed.has(group.key)
+                      return (
+                        <RankGroupRows
+                          key={group.key}
+                          groupKey={group.key}
+                          groupItems={group.items}
+                          allItems={items}
+                          isGrouped={isGrouped}
+                          isCollapsed={isCollapsed}
+                          onToggle={() => toggleGroup(group.key)}
+                          flavorColorMap={flavorColorMap}
+                        />
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
 
@@ -340,14 +391,6 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         <section className="glass rounded-2xl p-6">
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
-            {aiVerdictsLoading && (
-              <span className="text-xs font-normal text-cyan-glow flex items-center gap-1 ml-1">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-cyan-glow animate-pulse" /> AI 分析中
-              </span>
-            )}
-            {!aiVerdictsLoading && Object.keys(aiVerdicts).length > 0 && (
-              <span className="text-xs font-normal text-slate-500 ml-1">· AI 解读</span>
-            )}
           </h3>
           <p className="text-xs text-slate-500 mb-5">
             按总量排序看单价变化 · 相邻档位逐级对比，每步升级多花多少、单价降多少 · 折线斜率越陡 = 边际效益变化越快
@@ -359,7 +402,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价随总量变化曲线
               <span className="text-slate-600">· 下行=大包装更划算，陡降=边际效益高</span>
             </div>
-            <div className="h-64">
+            <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
                   const chartData = mergeVariantSkus(items).map((it) => {
@@ -374,18 +417,18 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   return (
                     <LineChart
                       data={chartData}
-                      margin={{ top: 24, right: 24, bottom: 24, left: 8 }}
+                      margin={{ top: 28, right: 32, bottom: 28, left: 8 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
                       <XAxis
                         dataKey="总量"
                         type="number"
-                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tick={{ fill: '#64748b', fontSize: 11 }}
                         tickFormatter={(v) => fmt.num(v)}
-                        label={{ value: '总量', fill: '#64748b', fontSize: 10, position: 'insideBottom', offset: -2 }}
+                        label={{ value: '总量', fill: '#64748b', fontSize: 11, position: 'insideBottom', offset: -2 }}
                       />
                       <YAxis
-                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tick={{ fill: '#64748b', fontSize: 11 }}
                         tickFormatter={(v) => `¥${v}`}
                         width={56}
                       />
@@ -400,14 +443,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         type="monotone"
                         dataKey="单价"
                         stroke="#06b6d4"
-                        strokeWidth={2}
-                        dot={{ fill: '#06b6d4', r: 4 }}
-                        activeDot={{ r: 6 }}
+                        strokeWidth={2.5}
+                        dot={{ fill: '#06b6d4', r: 5 }}
+                        activeDot={{ r: 7 }}
                         label={(props: { x?: number; y?: number; index?: number }) => {
                           const { x, y, index } = props
                           if (x == null || y == null || index == null) return <g />
                           return (
-                            <text x={x} y={y - 10} fill="#94a3b8" fontSize={10} textAnchor="middle">
+                            <text x={x} y={y - 12} fill="#94a3b8" fontSize={11} textAnchor="middle">
                               {chartData[index]?.name}
                             </text>
                           )
@@ -420,19 +463,16 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             </div>
           </div>
 
-          {/* 表格：精细分级 + 关键指标 */}
+          {/* 表格：精细分级 + 关键指标。评级合并到规格列（左侧色条 + 标签），省一列宽度 */}
           <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[640px]">
+            <table className="w-full text-xs min-w-[520px]">
               <thead>
                 <tr className="border-b border-edge text-left text-sm text-slate-500">
                   <th className="px-2 py-2 font-medium">规格</th>
                   <th className="px-2 py-2 font-medium text-right">多花</th>
                   <th className="px-2 py-2 font-medium text-right">多得</th>
                   <th className="px-2 py-2 font-medium text-right">单价变化</th>
-                  <th className="px-2 py-2 font-medium text-right">
-                    {aiVerdictsLoading ? 'AI 分析中…' : '省/亏'}
-                  </th>
-                  <th className="px-2 py-2 font-medium text-center">评级</th>
+                  <th className="px-2 py-2 font-medium text-right">多花1元多得</th>
                 </tr>
               </thead>
               <tbody>
@@ -441,33 +481,35 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   // 拆分规格名：优先显示关键规格部分（如 16g×8袋），口味作为副标题
                   const { flavor, spec } = parseFlavor(m.toName)
                   const showShort = spec && spec.length <= 20
-                  // AI 表述优先，回退本地净省/净亏
-                  const aiText = aiVerdicts[m.toId]
-                  const localText = m.netSaving > 0 ? `省 ¥${m.netSaving.toFixed(2)}` : m.netSaving < 0 ? `亏 ¥${Math.abs(m.netSaving).toFixed(2)}` : '持平'
-                  const savingText = aiText ?? (aiVerdictsLoading ? '…' : localText)
+                  // 多花1元能多买多少量 = 多得的量 / 多花的钱（边际效率）
+                  const perExtraYuan = m.extraCost > 0 ? m.extraQuantity / m.extraCost : 0
                   return (
-                    <tr key={i} className="border-b border-edge/50 hover:bg-brand-soft/30 transition-colors">
-                      <td className="px-2 py-2.5">
-                        <div className="font-medium truncate max-w-[220px]" title={m.toName}>
-                          {showShort ? spec : m.toName}
+                    <tr
+                      key={i}
+                      className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${style.row}`}
+                    >
+                      {/* 规格 + 评级合并：左侧 3px 色条标识分级，规格名后跟评级标签 */}
+                      <td className="px-2 py-2.5" style={{ borderLeft: `3px solid ${style.bar}` }}>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium truncate max-w-[180px]" title={m.toName}>
+                            {showShort ? spec : m.toName}
+                          </span>
+                          {showShort && flavor && (
+                            <span className="text-sm text-slate-500 truncate max-w-[140px]">{flavor}</span>
+                          )}
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.badge}`}>
+                            {style.label}
+                          </span>
                         </div>
-                        {showShort && flavor && (
-                          <div className="text-sm text-slate-500 mt-0.5 truncate max-w-[220px]">{flavor}</div>
-                        )}
-                        <div className="text-sm text-slate-500 mt-0.5">{aiText ?? m.verdict}</div>
+                        <div className="text-sm text-slate-500 mt-0.5">{m.verdict}</div>
                       </td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</td>
                       <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-cyan-glow' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
                         {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
                       </td>
-                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.netSaving > 0 ? 'text-cyan-glow' : m.netSaving < 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                        {savingText}
-                      </td>
-                      <td className="px-2 py-2.5 text-center">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-sm font-semibold ${style.badge}`}>
-                          {style.label}
-                        </span>
+                      <td className="px-2 py-2.5 text-right tabular font-semibold text-cyan-glow">
+                        {perExtraYuan > 0 ? `${fmt.num(perExtraYuan)}${m.unit}` : '—'}
                       </td>
                     </tr>
                   )
@@ -485,24 +527,24 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               </span>
             ))}
           </div>
+
+          {/* 避坑提示：紧贴边际分析下方，下单前看清潜在陷阱 */}
+          <div className="mt-6 pt-6 border-t border-edge/60">
+            <h4 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-400" /> 避坑提示
+            </h4>
+            <ul className="space-y-2">
+              {warnings.map((w, i) => (
+                <li key={i} className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
         </section>
       )}
-
-      {/* 避坑提示 */}
-      <section className="glass rounded-2xl p-6">
-        <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-          <AlertTriangle className="h-5 w-5 text-amber-400" /> 避坑提示
-        </h3>
-        <p className="text-xs text-slate-500 mb-5">下单前，先看清这些潜在的坑</p>
-        <ul className="space-y-3">
-          {warnings.map((w, i) => (
-            <li key={i} className="flex gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4">
-              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
-            </li>
-          ))}
-        </ul>
-      </section>
+      </div>
     </div>
   )
 }
@@ -556,23 +598,11 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-base font-bold text-cyan-glow tabular">
-            {fmt.priceUnit(cluster.repUnitPrice)}
+          <div className="text-base font-bold tabular">
+            <span className="text-cyan-glow">{fmt.priceUnit(cluster.repUnitPrice)}</span>
+            <span className="text-sm text-slate-500 font-normal"> /{cluster.unit}</span>
           </div>
-          <div className="text-sm text-slate-500">/{cluster.unit}起</div>
-        </div>
-        <div className="hidden sm:block w-24 shrink-0">
-          <div className="text-sm text-slate-500 mb-1 text-right tabular">
-            {cluster.score.toFixed(0)}分
-          </div>
-          <div className="h-1.5 rounded-full bg-edge overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${cluster.score}%` }}
-              transition={{ duration: 0.8, delay: 0.2 + idx * 0.06, ease: [0.16, 1, 0.3, 1] }}
-              className="h-full rounded-full bg-gradient-to-r from-brand to-emerald-600"
-            />
-          </div>
+          <div className="text-sm text-slate-500">每包 {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
         </div>
       </div>
 
@@ -618,5 +648,95 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
         </div>
       )}
     </motion.div>
+  )
+}
+
+/* ============ 全量视图：分组折叠行 ============ */
+
+interface RankGroupRowsProps {
+  groupKey: string
+  groupItems: ComputedSku[]
+  allItems: ComputedSku[]
+  isGrouped: boolean
+  isCollapsed: boolean
+  onToggle: () => void
+  flavorColorMap: Map<string, string>
+}
+
+function RankGroupRows({
+  groupKey,
+  groupItems,
+  allItems,
+  isGrouped,
+  isCollapsed,
+  onToggle,
+  flavorColorMap,
+}: RankGroupRowsProps) {
+  // 列数：# + 规格 + 总价 + 总量 + 每单位 + 每包 = 6
+  const colCount = 6
+  return (
+    <>
+      {/* 分组标题行（仅分组时显示） */}
+      {isGrouped && (
+        <tr
+          onClick={onToggle}
+          className="border-b border-edge bg-brand-soft/60 cursor-pointer hover:bg-brand-soft/70 transition-colors select-none"
+        >
+          <td colSpan={colCount} className="px-2 py-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+              <ChevronDown
+                className={`h-3.5 w-3.5 text-cyan-glow transition-transform duration-200 ${
+                  isCollapsed ? '-rotate-90' : ''
+                }`}
+              />
+              <span className="text-cyan-glow">{groupKey}</span>
+              <span className="text-slate-500 font-normal">（{groupItems.length} 个规格）</span>
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* 数据行：折叠时隐藏，分组内排名按 allItems 中的位置 */}
+      {!isCollapsed &&
+        groupItems.map((item) => {
+          // 用全局排名（item.rank 已按得分排序），前三名用奖牌图标
+          const idx = allItems.findIndex((x) => x.id === item.id)
+          const RankIcon = RANK_ICON[idx]
+          const { flavor } = parseFlavor(item.name)
+          const flavorBg = flavor ? flavorColorMap.get(flavor) ?? '' : ''
+          return (
+            <tr
+              key={item.id}
+              className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${
+                item.isBest ? 'bg-cyan-glow/5' : ''
+              } ${flavorBg && !item.isBest ? flavorBg : ''}`}
+            >
+              <td className="px-2 py-2.5 text-center">
+                <div
+                  className={`inline-flex h-7 w-7 rounded-lg items-center justify-center font-bold text-white ${
+                    RANK_STYLE[idx] ?? 'bg-edge text-slate-600'
+                  }`}
+                >
+                  {RankIcon ? <RankIcon className="h-3.5 w-3.5" /> : (
+                    <span className="tabular text-xs">{item.rank}</span>
+                  )}
+                </div>
+              </td>
+              <td className="px-2 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium truncate max-w-[180px]" title={item.name}>{item.name}</span>
+                  {item.isBest && (
+                    <span className="px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow text-xs font-semibold">推荐</span>
+                  )}
+                </div>
+              </td>
+              <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(item.price)}</td>
+              <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
+              <td className="px-2 py-2.5 text-right tabular font-semibold text-cyan-glow">{fmt.priceUnit(item.unitPrice)}</td>
+              <td className="px-2 py-2.5 text-right tabular text-slate-300">{fmt.yuan(item.packPrice)}</td>
+            </tr>
+          )
+        })}
+    </>
   )
 }

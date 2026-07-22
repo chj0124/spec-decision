@@ -102,9 +102,12 @@ export function unitMixWarning(skus: Sku[]): string | null {
 export function computeSku(s: Sku): ComputedSku {
   // 先把单件含量换算到基准单位，再乘件数得总量
   const norm = normalizeUnit(s.quantity, s.unit)
-  const totalQuantity = round(norm.value * Math.max(1, s.packs), 4)
+  const safePacks = Math.max(1, s.packs)
+  const totalQuantity = round(norm.value * safePacks, 4)
   // 单价 = 总价 / 基准单位总量（单位统一后跨规格可比）
   const unitPrice = totalQuantity > 0 ? round(s.price / totalQuantity, 6) : 0
+  // 每包价格 = 总价 / 件数（"包"对消费者比每g更直观，常用于"一袋多少钱"）
+  const packPrice = round(s.price / safePacks, 2)
   const bonusPerYuan =
     s.bonusValue && s.price > 0 ? round(s.bonusValue / s.price, 4) : undefined
   return {
@@ -113,6 +116,7 @@ export function computeSku(s: Sku): ComputedSku {
     unit: norm.base || s.unit,
     totalQuantity,
     unitPrice,
+    packPrice,
     bonusPerYuan,
     score: 0,
     rank: 0,
@@ -283,21 +287,25 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
 
     // 结论文案用短名（规格部分），避免长规格名被截断后关键信息丢失
     const baseShort = shortName(base)
-    const netStr = netSaving > 0 ? `净省 ¥${netSaving.toFixed(2)}` : netSaving < 0 ? `净亏 ¥${Math.abs(netSaving).toFixed(2)}` : '持平'
-    let verdict = ''
-    if (grade === 'great' && extraCost <= 0) {
-      verdict = `比「${baseShort}」更便宜还更多，${netStr}，直接闭眼入。`
-    } else if (grade === 'great') {
-      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，${netStr}，超值。`
-    } else if (grade === 'good') {
-      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，${netStr}，划算。`
-    } else if (grade === 'fair') {
-      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，基本持平。`
-    } else if (grade === 'poor') {
-      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，小亏。`
-    } else {
-      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，明显不划算。`
-    }
+    // 三段式表述：①比前档贵多少 ②多换到多少量 ③每单位省/贵多少钱
+    // 例："比「16g×4袋」贵 ¥3.56，多 160g，每 g 省 2.23 分，划算。"
+    // 用过滤+join 避免某段为空时出现连续逗号
+    const costStr = `比「${baseShort}」贵 ${fmt.yuan(extraCost)}`
+    const qtyStr = extraQuantity > 0 ? `多 ${extraQuantity}${item.unit}` : ''
+    const marginStr = marginalSaving > 0
+      ? `每${item.unit}省 ${fmt.priceUnit(marginalSaving)}`
+      : marginalSaving < 0
+        ? `每${item.unit}反贵 ${fmt.priceUnit(Math.abs(marginalSaving))}`
+        : `每${item.unit}持平`
+    const tail = grade === 'great' ? '超值'
+      : grade === 'good' ? '划算'
+      : grade === 'fair' ? '看需求选'
+      : grade === 'poor' ? '不划算'
+      : '别买'
+    const body = [costStr, qtyStr, marginStr].filter(Boolean).join('，')
+    const verdict = grade === 'great' && extraCost <= 0
+      ? `比「${baseShort}」更便宜还更多，直接闭眼入。`
+      : `${body}，${tail}。`
 
     out.push({
       fromId: base.id,
