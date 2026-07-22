@@ -1,5 +1,4 @@
 import type { Sku, Theme, DecisionConfig, ParamDim } from './types'
-import { uid } from './engine'
 
 const SKU_KEY = 'spec-decision:skus'
 const THEME_KEY = 'spec-decision:theme'
@@ -107,86 +106,4 @@ export function migrateV1ToV2(): { skus: Sku[]; config: DecisionConfig; changed:
   return { skus: newSkus, config: newConfig, changed: true }
 }
 
-/** 场景化示例数据：零食（多口味簇化演示）/ 手机（多维参数演示） */
-export function sampleScene(scene: 'snack' | 'phone'): {
-  skus: Sku[]
-  config: DecisionConfig
-} {
-  if (scene === 'snack') {
-    // 3 口味 × 4 款式 = 12 个 SKU，用于演示「按定价因子聚合分簇」
-    // 零食场景没有附加参数维度，只用价格
-    const flavors = ['香辣味', '原味', '烧烤味']
-    const styles = [
-      { q: 16, p: 8, price: 4.94 },
-      { q: 16, p: 16, price: 8.9 },
-      { q: 20, p: 10, price: 7.5 },
-      { q: 30, p: 20, price: 16.8 },
-    ]
-    const out: Sku[] = []
-    for (const f of flavors) {
-      for (const s of styles) {
-        out.push({
-          id: uid(),
-          name: `${f} ${s.q}g×${s.p}袋`,
-          price: s.price,
-          quantity: s.q,
-          unit: 'g',
-          packs: s.p,
-        })
-      }
-    }
-    return {
-      skus: out,
-      config: { ...DEFAULT_CONFIG, category: '零食', flavorLabel: '口味' },
-    }
-  }
-  // 手机场景：多维参数演示
-  const dimBattery: ParamDim = {
-    id: 'battery',
-    label: '电池容量',
-    type: 'higher-better',
-    weight: 25,
-    unit: 'mAh',
-  }
-  const dimScreen: ParamDim = {
-    id: 'screen',
-    label: '屏幕尺寸',
-    type: 'higher-better',
-    weight: 15,
-    unit: '英寸',
-  }
-  const dimWeight: ParamDim = {
-    id: 'weight',
-    label: '机身重量',
-    type: 'lower-better',
-    weight: 10,
-    unit: 'g',
-  }
-  return {
-    skus: [
-      {
-        id: uid(), name: '标准版 8+128', price: 1999, quantity: 128, unit: 'GB', packs: 1,
-        params: { battery: 4500, screen: 6.1, weight: 175 },
-      },
-      {
-        id: uid(), name: '增强版 12+256', price: 2599, quantity: 256, unit: 'GB', packs: 1,
-        params: { battery: 5000, screen: 6.4, weight: 185 },
-      },
-      {
-        id: uid(), name: '旗舰版 16+512', price: 3499, quantity: 512, unit: 'GB', packs: 1,
-        params: { battery: 5500, screen: 6.7, weight: 198 },
-      },
-      {
-        id: uid(), name: '轻奢版 8+256', price: 2899, quantity: 256, unit: 'GB', packs: 1,
-        params: { battery: 4800, screen: 6.3, weight: 172 },
-      },
-    ],
-    config: {
-      dims: [dimBattery, dimScreen, dimWeight],
-      priceWeight: 50,
-      preference: 'score',
-      category: '手机',
-      flavorLabel: '版本',
-    },
-  }
-}
+/** 决策引擎与示例生成已迁移至 aiSample.ts（AI 生成 / 内置真实模板兜底）。 */

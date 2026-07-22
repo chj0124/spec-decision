@@ -3,7 +3,7 @@ import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
   loadSkus, saveSkus, loadTheme, saveTheme,
-  loadConfig, saveConfig, migrateV1ToV2, sampleScene,
+  loadConfig, saveConfig, migrateV1ToV2,
 } from './lib/store'
 import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
@@ -49,13 +49,6 @@ export default function App() {
   )
   const aiReady = isAiReady()
   const visionReady = isVisionReady()
-
-  // 加载示例场景时同步覆盖 skus + config
-  const handleLoadScene = (scene: 'snack' | 'phone') => {
-    const s = sampleScene(scene)
-    setSkus(s.skus)
-    setConfig(s.config)
-  }
 
   // 切换偏好（报告页 segmented control 触发）
   const handlePreferenceChange = (p: Preference) => {
@@ -153,7 +146,6 @@ export default function App() {
               onGenerate={() => setPage('report')}
               config={config}
               onConfigChange={setConfig}
-              onLoadScene={handleLoadScene}
             />
           ) : (
             <Report

@@ -456,14 +456,26 @@ export function mergeVariantSkus(sorted: ComputedSku[]): ComputedSku[] {
 }
 
 /**
- * 把「quantity × packs × unit 相同」的规格归为一簇——它们价格结构一致，
- * 差异只在口味/颜色等「不影响单价」的干扰维度上。
+ * 把「quantity × packs × unit 相同、且参数维度也相同」的规格归为一簇——
+ * 它们才是同一款商品，差异只在口味/颜色等「不影响单价」的干扰维度上。
  * 决策时以簇为单位比价，簇内再挑口味，把 12 选 1 降维成 4 选 1。
+ *
+ * 关键：聚类 key 必须包含参数签名。否则同一存储/含量下若出现参数不同的商品
+ * （如 256GB 手机有 12G/8G 内存、不同电池），会被误并成一簇、当成"同款不同口味"，
+ * 掩盖真实的规格/价格差异。只有参数完全一致（仅干扰维度不同）才合并。
  */
+function paramSignature(params?: Record<string, ParamValue>): string {
+  if (!params) return ''
+  return Object.keys(params)
+    .sort()
+    .map((k) => `${k}=${JSON.stringify(params[k])}`)
+    .join('&')
+}
+
 export function clusterItems(items: ComputedSku[]): SkuCluster[] {
   const map = new Map<string, ComputedSku[]>()
   for (const item of items) {
-    const key = `${item.quantity}|${item.packs}|${item.unit}`
+    const key = `${item.quantity}|${item.packs}|${item.unit}|${paramSignature(item.params)}`
     if (!map.has(key)) map.set(key, [])
     map.get(key)!.push(item)
   }

@@ -307,7 +307,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 先比价格、再在卡片内挑口味
               </p>
               {decisionUnits.map((cluster, idx) => (
-                <ClusterCard key={cluster.key} cluster={cluster} idx={idx} />
+                <ClusterCard key={cluster.key} cluster={cluster} idx={idx} flavorLabel={flavorLabel} />
               ))}
             </>
           ) : (
@@ -401,11 +401,13 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2">
               <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价随总量变化曲线
               <span className="text-slate-600">· 下行=大包装更划算，陡降=边际效益高</span>
+              <span className="text-slate-600">· 仅标注边际效益（单价降幅）前三的规格</span>
             </div>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
-                  const chartData = mergeVariantSkus(items).map((it) => {
+                  const merged = mergeVariantSkus(items)
+                  const chartData = merged.map((it) => {
                     const { spec } = parseFlavor(it.name)
                     const label = spec || it.name
                     return {
@@ -414,6 +416,16 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       单价: round6(it.unitPrice),
                     }
                   })
+                  // 边际效益前三高（单价降幅 unitPriceDropPct 最大）的规格：仅这些在折线图上显示名字。
+                  // margins[j] 是 merged[j]→merged[j+1] 的过渡，其目标规格索引为 j+1。
+                  const topNameIdx = new Set(
+                    margins
+                      .map((m, j) => ({ idx: j + 1, drop: m.unitPriceDropPct ?? 0 }))
+                      .filter((d) => d.idx < chartData.length)
+                      .sort((a, b) => b.drop - a.drop)
+                      .slice(0, 3)
+                      .map((d) => d.idx),
+                  )
                   return (
                     <LineChart
                       data={chartData}
@@ -449,8 +461,20 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         label={(props: { x?: number; y?: number; index?: number }) => {
                           const { x, y, index } = props
                           if (x == null || y == null || index == null) return <g />
+                          // 仅显示边际效益前三高的规格名字，其余点位只画点不标名
+                          if (!topNameIdx.has(index)) return <g />
                           return (
-                            <text x={x} y={y - 12} fill="#94a3b8" fontSize={11} textAnchor="middle">
+                            <text
+                              x={x}
+                              y={y - 14}
+                              fill="#38e0f0"
+                              stroke="#0b1220"
+                              strokeWidth={3}
+                              paintOrder="stroke"
+                              fontSize={13}
+                              fontWeight={700}
+                              textAnchor="middle"
+                            >
                               {chartData[index]?.name}
                             </text>
                           )
@@ -550,7 +574,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 }
 
 /** 簇卡片：一个定价规格 + 簇内多口味标签切换。先比价格，再挑口味。 */
-function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
+function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: number; flavorLabel: string }) {
   const RankIcon = RANK_ICON[idx]
   // 默认选中簇内最省钱的成员
   const cheapest = cluster.members[0]
@@ -586,7 +610,7 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
             )}
             {hasFlavors && (
               <span className="text-sm px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">
-                {cluster.members.length} 种口味
+                {cluster.members.length} 种{flavorLabel}
               </span>
             )}
           </div>
@@ -611,9 +635,9 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
         <div className="mt-3 pt-3 border-t border-edge/60">
           <div className="text-sm text-slate-500 mb-2 flex items-center gap-1">
             <ChevronDown className="h-3 w-3" />
-            价格结构相同，挑个口味即可
+            价格结构相同，挑个{flavorLabel}即可
             {cluster.priceSpread > 0 && (
-              <span className="text-amber-400/80 ml-1">（口味间有价差，已按最省钱排序）</span>
+              <span className="text-amber-400/80 ml-1">（{flavorLabel}间有价差，已按最省钱排序）</span>
             )}
           </div>
           <div className="flex flex-wrap gap-1.5">

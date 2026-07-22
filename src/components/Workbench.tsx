@@ -5,11 +5,12 @@ import type { GroupBy } from '../lib/engine'
 import { recognizeImage, recognizeImages, toSku } from '../lib/recognize'
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
+import { generateExample } from '../lib/aiSample'
 import RecognizeReview from './RecognizeReview'
 import {
   Plus, Trash2, ImagePlus, Loader2,
-  Cookie, Smartphone, ArrowRight, UploadCloud, ChevronDown,
-  Sliders, PieChart as PieIcon, X,
+  Sparkles, ArrowRight, UploadCloud, ChevronDown,
+  Sliders, PieChart as PieIcon, X, AlertCircle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
@@ -20,7 +21,6 @@ interface Props {
   onGenerate: () => void
   config: DecisionConfig
   onConfigChange: (c: DecisionConfig) => void
-  onLoadScene: (scene: 'snack' | 'phone') => void
 }
 
 const emptySku = (): Sku => ({
@@ -70,7 +70,7 @@ const GROUP_BAR_COLORS = [
   '#f43f5e', '#06b6d4', '#f97316', '#14b8a6',
 ]
 
-export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange, onLoadScene }: Props) {
+export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange }: Props) {
   const [scanning, setScanning] = useState(false)
   const [scanPreviews, setScanPreviews] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
@@ -102,7 +102,26 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
   const remove = (id: string) => onChange(skus.filter((s) => s.id !== id))
   const add = () => onChange([...skus, emptySku()])
-  const loadScene = (scene: 'snack' | 'phone') => onLoadScene(scene)
+
+  // AI 生成示例：调用 generator（已配置 AI 则实时生成，否则回退内置真实模板）
+  const [genLoading, setGenLoading] = useState(false)
+  const [genError, setGenError] = useState<string | null>(null)
+  const handleGenExample = async () => {
+    setGenLoading(true)
+    setGenError(null)
+    try {
+      const { skus: g, config: c, source, note } = await generateExample()
+      onChange(g)
+      onConfigChange(c)
+      if (source === 'fallback' && note) {
+        setGenError(note)
+      }
+    } catch (e: any) {
+      setGenError('生成示例失败：' + (e?.message ?? e))
+    } finally {
+      setGenLoading(false)
+    }
+  }
 
   // ============ 维度管理 ============
   const addDim = () => {
@@ -346,16 +365,15 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => loadScene('snack')}
-            className="px-3 py-2 rounded-lg border border-edge text-xs font-medium text-slate-600 hover:border-cyan-glow/50 hover:text-cyan-glow transition-all flex items-center gap-1.5"
+            onClick={handleGenExample}
+            disabled={genLoading}
+            className="px-3 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-400/40 text-xs font-semibold text-violet-300 hover:shadow-glow transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait"
+            title="用 AI 自动生成一份逼真的多 SKU 比价示例（每次品类不同；未配置 AI 时回退内置真实商品模板）"
           >
-            <Cookie className="h-3.5 w-3.5" /> 零食示例
-          </button>
-          <button
-            onClick={() => loadScene('phone')}
-            className="px-3 py-2 rounded-lg border border-edge text-xs font-medium text-slate-600 hover:border-cyan-glow/50 hover:text-cyan-glow transition-all flex items-center gap-1.5"
-          >
-            <Smartphone className="h-3.5 w-3.5" /> 手机示例
+            {genLoading
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Sparkles className="h-3.5 w-3.5" />}
+            {genLoading ? '生成中…' : 'AI 生成示例'}
           </button>
           <button
             onClick={() => fileRef.current?.click()}
@@ -373,6 +391,14 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             onChange={(e) => e.target.files && pickImage(e.target.files)}
           />
         </div>
+
+      {/* AI 生成示例：状态提示 */}
+      {genError && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+          <span>{genError}（可在右上角「AI 设置」中配置后获得每次不同的真实生成结果。）</span>
+        </div>
+      )}
       </div>
 
       {/* AI 识别：扫描进度 / 确认修正 */}
@@ -483,7 +509,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             >
               <div className="flex flex-col lg:flex-row gap-4 p-4">
                 {/* 左：维度列表 */}
-                <div className="flex-1 space-y-2 min-w-0">
+                <div className="flex-1 space-y-2 min-w-0 overflow-x-auto">
                   {/* 价格维度（内置，不可删除） */}
                   <div className="flex items-center gap-2 p-2 rounded-lg bg-brand-soft/30 border border-edge">
                     <span className="text-xs font-mono text-slate-500 w-6">价格</span>
@@ -516,8 +542,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       <input
                         value={dim.label}
                         onChange={(e) => updateDim(dim.id, { label: e.target.value })}
-                        placeholder="维度名（如 电池容量）"
-                        className="field py-1.5 text-xs flex-1 min-w-0"
+                        placeholder="维度名（可点击改名，如 电池容量）"
+                        className="field py-1.5 text-xs flex-1 min-w-[140px] cursor-text hover:border-cyan-glow/60 focus:border-cyan-glow focus:ring-1 focus:ring-cyan-glow/40"
                       />
                       {isNumericType(dim.type) && (
                         <input

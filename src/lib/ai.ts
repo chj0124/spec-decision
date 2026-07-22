@@ -62,7 +62,8 @@ export function getVisionModel(c: AiConfig): string {
 /**
  * 底层请求：OpenAI 兼容的 chat/completions。
  * messages 已构造好（文本或多模态均可）。model 由调用方指定。
- * dev 模式走 /api/ai-chat 代理，绕过浏览器 CORS。
+ * 统一走同源代理 /api/ai-chat：dev 由 vite 插件转发，生产由 serverless 函数（Vercel）转发，
+ * 以此绕过浏览器 CORS。纯静态托管（无代理函数）会优雅失败，由调用方回退到内置示例。
  */
 async function requestChat(
   c: AiConfig,
@@ -72,10 +73,8 @@ async function requestChat(
   timeoutMs = 90000,
   extraBody?: Record<string, any>,
 ): Promise<string> {
-  const isDev = import.meta.env.DEV
-  const url = isDev
-    ? '/api/ai-chat'
-    : `${c.baseUrl.replace(/\/$/, '')}/chat/completions`
+  // 同源代理：dev / 生产一致，凭据放在 body 里由代理转发
+  const url = '/api/ai-chat'
 
   // 超时控制：视觉模型处理图片可能需要 10-30 秒，给 90 秒上限
   const controller = new AbortController()
@@ -85,17 +84,15 @@ async function requestChat(
   try {
     resp = await fetch(url, {
       method: 'POST',
-      headers: isDev
-        ? { 'Content-Type': 'application/json' }
-        : {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${c.apiKey}`,
-          },
-      body: JSON.stringify(
-        isDev
-          ? { baseUrl: c.baseUrl, apiKey: c.apiKey, model, messages, temperature, ...extraBody }
-          : { model, messages, temperature, ...extraBody },
-      ),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        baseUrl: c.baseUrl,
+        apiKey: c.apiKey,
+        model,
+        messages,
+        temperature,
+        ...extraBody,
+      }),
       signal: controller.signal,
     })
   } catch (e: any) {
@@ -107,9 +104,7 @@ async function requestChat(
     }
     if (/failed to fetch|networkerror|load failed/i.test(reason)) {
       throw new Error(
-        isDev
-          ? '本地代理请求失败（vite dev server 异常或上游网络不通，请检查 baseUrl 是否正确、代理是否拦截）。'
-          : '网络请求失败（可能是 CORS 拦截、地址错误、或该服务商不允许浏览器直连）。',
+        'AI 代理未连接：请确认本地开发服务器（npm run dev）正在运行；线上环境若未部署代理函数，将自动回退到内置示例。',
       )
     }
     throw new Error(`网络请求失败：${reason}`)
@@ -124,19 +119,23 @@ async function requestChat(
     } catch { /* 非 JSON 就用原文 */ }
     throw new Error(`AI 请求失败 ${resp.status}: ${String(detail).slice(0, 160)}`)
   }
-  const data = await resp.json()
+  const data = await resp.json().catch(() => null)
   const text = data?.choices?.[0]?.message?.content
-  if (!text) throw new Error('AI 返回为空')
+  if (!text) throw new Error('AI 返回为空（代理未正确部署或被拦截）')
   return String(text)
 }
 
 /** 调 AI 对话，返回文本。失败抛错，由调用方回退。
  *  可传入 overrideConfig 用于"测试连接"等场景（不读 localStorage，直接用表单当前值）。
+ *  extraBody 透传到上游请求体（如豆包禁用推理 { thinking: { type: 'disabled' } }）；
+ *  timeoutMs 覆盖默认超时（默认 90s，生成类任务用更长）。
  */
 export async function chat(
   prompt: string,
   system?: string,
   overrideConfig?: AiConfig,
+  extraBody?: Record<string, any>,
+  timeoutMs?: number,
 ): Promise<string> {
   const c = overrideConfig ?? loadAiConfig()
   if (!c.apiKey || !c.baseUrl || !c.model) throw new Error('AI 未配置（请填写 Base URL / API Key / Model）')
@@ -145,7 +144,7 @@ export async function chat(
     ...(system ? [{ role: 'system', content: system }] : []),
     { role: 'user', content: prompt },
   ]
-  return requestChat(c, c.model, messages, 0.1)
+  return requestChat(c, c.model, messages, 0.1, timeoutMs ?? 90000, extraBody)
 }
 
 /**
@@ -186,11 +185,8 @@ export async function listModels(overrideConfig?: AiConfig): Promise<string[]> {
   const c = overrideConfig ?? loadAiConfig()
   if (!c.apiKey || !c.baseUrl) throw new Error('请先填写 Base URL 和 API Key')
 
-  const isDev = import.meta.env.DEV
-  // dev 模式走代理；生产模式直连。GET /models 是标准 OpenAI 接口，多数兼容服务商都支持。
-  const url = isDev
-    ? '/api/ai-models'
-    : `${c.baseUrl.replace(/\/$/, '')}/models`
+  // 同源代理 /api/ai-models（dev = vite 插件；生产 = serverless 函数）
+  const url = '/api/ai-models'
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 20000)
@@ -198,24 +194,22 @@ export async function listModels(overrideConfig?: AiConfig): Promise<string[]> {
   let resp: Response
   try {
     resp = await fetch(url, {
-      method: isDev ? 'POST' : 'GET',
-      headers: isDev
-        ? { 'Content-Type': 'application/json' }
-        : { Authorization: `Bearer ${c.apiKey}` },
-      body: isDev ? JSON.stringify({ baseUrl: c.baseUrl, apiKey: c.apiKey }) : undefined,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUrl: c.baseUrl, apiKey: c.apiKey }),
       signal: controller.signal,
     })
   } catch (e: any) {
     clearTimeout(timer)
-    throw new Error('网络请求失败，请检查 Base URL 是否正确')
+    throw new Error('AI 代理未连接：请确认本地开发服务器正在运行，或线上已部署代理函数。')
   }
   clearTimeout(timer)
   if (!resp.ok) {
     const t = await resp.text().catch(() => '')
     throw new Error(`获取模型失败 ${resp.status}: ${t.slice(0, 120)}`)
   }
-  const data = await resp.json()
+  const data = await resp.json().catch(() => null)
   const list: string[] = (data?.data ?? []).map((m: any) => m.id).filter(Boolean)
-  if (list.length === 0) throw new Error('服务商未返回模型列表')
+  if (list.length === 0) throw new Error('服务商未返回模型列表（代理未正确部署？）')
   return list.sort()
 }
