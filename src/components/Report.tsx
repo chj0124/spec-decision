@@ -1,15 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import type { DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt, mergeVariantSkus } from '../lib/engine'
+import { fmt, mergeVariantSkus, parseFlavor } from '../lib/engine'
+import { chat, isAiReady } from '../lib/ai'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  RadarChart, PolarGrid, PolarAngleAxis, Radar, PolarRadiusAxis,
-  LineChart, Line, CartesianGrid, Legend,
+  LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
 
 interface Props {
@@ -61,13 +60,45 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     setView(v)
   }
 
-  // 雷达图维度：综合分 + 性价比 + 总量 + 各 ParamDim 维度分
-  const radarDims: { key: string; label: string }[] = [
-    { key: '__score', label: '综合分' },
-    { key: '__value', label: '性价比' },
-    { key: '__total', label: '总量' },
-    ...config.dims.map((d) => ({ key: d.id, label: d.label })),
-  ]
+  // AI 边际效益表述：让配置的 AI 模型为每条边际分析生成简明扼要的"省/亏"维度说明
+  // AI 不可用或调用失败时回退到本地 netSaving 表述
+  const [aiVerdicts, setAiVerdicts] = useState<Record<string, string>>({})
+  const [aiVerdictsLoading, setAiVerdictsLoading] = useState(false)
+  useEffect(() => {
+    if (margins.length === 0 || !isAiReady()) return
+    let cancelled = false
+    setAiVerdictsLoading(true)
+    setAiVerdicts({})
+    // 构造数据给 AI：每条含目标规格、多花、多得、单价变化、净省
+    const payload = margins.map((m) => ({
+      toId: m.toId,
+      toName: m.toName,
+      fromName: m.fromName,
+      extraCost: m.extraCost,
+      extraQuantity: m.extraQuantity,
+      unit: m.unit,
+      priceDropPct: m.unitPriceDropPct,
+      netSaving: m.netSaving,
+    }))
+    const sys = '你是比价决策助手。用户给你相邻规格档位的对比数据，你为每条生成一句简明扼要的"省/亏"维度说明（不超过15字），用最直观的方式表达这一档值不值。例如：买大包每袋省0.3元、白赚2块钱的量、亏1.5元不如买小包、相当于打8折、加量不加价等。只返回 JSON 数组，每项 {toId, verdict}。'
+    chat(
+      `规格对比数据：\n${JSON.stringify(payload, null, 2)}\n\n请为每条生成 verdict。`,
+      sys,
+    )
+      .then((reply) => {
+        if (cancelled) return
+        // 提取 JSON 数组（兼容 AI 可能加 markdown 代码块）
+        const match = reply.match(/\[[\s\S]*\]/)
+        if (!match) throw new Error('parse')
+        const arr = JSON.parse(match[0]) as Array<{ toId: string; verdict: string }>
+        const map: Record<string, string> = {}
+        for (const item of arr) map[item.toId] = item.verdict
+        setAiVerdicts(map)
+      })
+      .catch(() => { /* AI 失败静默回退到本地表述 */ })
+      .finally(() => { if (!cancelled) setAiVerdictsLoading(false) })
+    return () => { cancelled = true }
+  }, [margins])
 
   if (items.length === 0) {
     return (
@@ -87,43 +118,6 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 决策单元：簇视图按簇，全量视图按单个规格
   const decisionUnits = view === 'cluster' ? clusters : null
 
-  const barSource = view === 'cluster' && clusters.length > 0
-    ? clusters.map((c) => ({ name: c.label, 单价: c.repUnitPrice, isBest: c.isBest }))
-    : items.map((i) => ({
-        name: i.name.length > 10 ? i.name.slice(0, 10) + '…' : i.name,
-        单价: i.unitPrice, isBest: i.isBest,
-      }))
-
-  const chartItems = view === 'cluster' && clusters.length > 0 ? null : items
-  const maxTotal = Math.max(...items.map((i) => i.totalQuantity), 1)
-
-  // 取某个 SKU/Cluster 在某维度的归一化分（0-100）
-  const getDimScore = (
-    source: typeof items[0] | (typeof clusters[0] extends { members: (infer M)[] } ? M : never),
-    key: string,
-  ): number => {
-    const it = source as { score: number; unitPrice: number; totalQuantity: number; dimScores?: Record<string, number> }
-    if (key === '__score') return Math.round(it.score)
-    if (key === '__value') {
-      const maxP = Math.max(...items.map((x) => x.unitPrice), 1)
-      return Math.round((1 - it.unitPrice / maxP) * 100)
-    }
-    if (key === '__total') return Math.round((it.totalQuantity / maxTotal) * 100)
-    return it.dimScores?.[key] ?? 0
-  }
-
-  const radarSubjects = view === 'cluster' && clusters.length > 0
-    ? clusters.map((c) => ({ name: c.label, ref: c.members[0] }))
-    : items.map((i) => ({ name: i.name, ref: i }))
-
-  const radarData = radarDims.map((d) => {
-    const row: Record<string, number | string> = { dim: d.label }
-    for (const s of radarSubjects) {
-      row[s.name] = getDimScore(s.ref, d.key)
-    }
-    return row
-  })
-
   return (
     <div className="space-y-8">
       {/* 返回 + 决策偏好 */}
@@ -137,7 +131,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
         {/* 决策偏好切换 */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-[11px] text-slate-500">决策偏好：</span>
+          <span className="text-sm text-slate-500">决策偏好：</span>
           <div className="flex rounded-lg border border-edge overflow-hidden">
             {([
               { key: 'value', label: '性价比优先' },
@@ -159,7 +153,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
           {config.preference === 'budget' && (
             <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-slate-500">预算</span>
+              <span className="text-sm text-slate-500">预算</span>
               <input
                 type="number"
                 min={0}
@@ -203,17 +197,17 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <h2 className="text-3xl sm:text-5xl font-bold tracking-tighter">{best.name}</h2>
                 <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
                   <div>
-                    <div className="text-[11px] text-slate-400 mb-0.5">每{best.unit}单价</div>
+                    <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
                     <div className="text-2xl font-bold text-cyan-glow tabular">
-                      {fmt.price4(best.unitPrice)}
+                      {fmt.priceUnit(best.unitPrice)}
                     </div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-slate-400 mb-0.5">综合得分</div>
+                    <div className="text-sm text-slate-400 mb-0.5">综合得分</div>
                     <div className="text-2xl font-bold tabular">{best.score.toFixed(1)}</div>
                   </div>
                   <div>
-                    <div className="text-[11px] text-slate-400 mb-0.5">总价 / 总量</div>
+                    <div className="text-sm text-slate-400 mb-0.5">总价 / 总量</div>
                     <div className="text-2xl font-bold tabular">
                       {fmt.yuan(best.price)}
                       <span className="text-sm text-slate-400 font-normal ml-2">
@@ -243,10 +237,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </motion.section>
       )}
 
-      {/* 排名列表 + 图表 */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* 排名（支持簇化简 / 全量切换） */}
-        <section className="lg:col-span-3 space-y-3">
+      {/* 排名（支持簇化简 / 全量切换） */}
+      <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-lg font-bold tracking-tight">
               {view === 'cluster' ? '决策排名（已按规格聚合）' : '完整排名'}
@@ -275,7 +267,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
           {view === 'cluster' && decisionUnits ? (
             <>
-              <p className="text-[11px] text-slate-500 -mt-1">
+              <p className="text-sm text-slate-500 -mt-1">
                 已把仅口味/颜色不同、价格结构一致的 {items.length} 个规格折叠为 {decisionUnits.length} 个决策项，
                 先比价格、再在卡片内挑口味
               </p>
@@ -309,23 +301,23 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-sm truncate">{item.name}</span>
                       {item.isBest && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
+                        <span className="text-sm px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
                           推荐
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5 tabular">
+                    <div className="text-sm text-slate-500 mt-0.5 tabular">
                       {fmt.yuan(item.price)} · {fmt.num(item.totalQuantity)}{item.unit}
                     </div>
                   </div>
                   <div className="text-right shrink-0">
                     <div className="text-base font-bold text-cyan-glow tabular">
-                      {fmt.price4(item.unitPrice)}
+                      {fmt.priceUnit(item.unitPrice)}
                     </div>
-                    <div className="text-[10px] text-slate-500">/{item.unit}</div>
+                    <div className="text-sm text-slate-500">/{item.unit}</div>
                   </div>
                   <div className="hidden sm:block w-24 shrink-0">
-                    <div className="text-[10px] text-slate-500 mb-1 text-right tabular">
+                    <div className="text-sm text-slate-500 mb-1 text-right tabular">
                       {item.score.toFixed(0)}分
                     </div>
                     <div className="h-1.5 rounded-full bg-edge overflow-hidden">
@@ -343,109 +335,87 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           )}
         </section>
 
-        {/* 图表 */}
-        <section className="lg:col-span-2 space-y-6">
-          <div className="glass rounded-2xl p-5">
-            <h4 className="text-sm font-semibold mb-4 flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-cyan-glow" />
-              每{items[0].unit}单价对比（越低越好）
-            </h4>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={barSource} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
-                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} cursor={{ fill: 'rgba(34,211,238,0.06)' }} />
-                <Bar dataKey="单价" radius={[6, 6, 0, 0]}>
-                  {barSource.map((d, i) => (
-                    <Cell key={i} fill={d.isBest ? '#22d3ee' : '#1c2740'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="glass rounded-2xl p-5">
-            <h4 className="text-sm font-semibold mb-4">多维能力雷达</h4>
-            <ResponsiveContainer width="100%" height={240}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="#1c2740" />
-                <PolarAngleAxis dataKey="dim" tick={{ fontSize: 11, fill: '#94a3b8' }} />
-                <PolarRadiusAxis tick={false} axisLine={false} domain={[0, 100]} />
-                {(view === 'cluster' ? clusters : items).slice(0, 4).map((unit: any) => {
-                  const key = view === 'cluster' ? unit.label : unit.name
-                  return (
-                    <Radar
-                      key={key}
-                      dataKey={key}
-                      stroke={unit.isBest ? '#22d3ee' : '#475569'}
-                      fill={unit.isBest ? '#22d3ee' : '#475569'}
-                      fillOpacity={unit.isBest ? 0.25 : 0.05}
-                      strokeWidth={unit.isBest ? 2 : 1}
-                    />
-                  )
-                })}
-                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={tooltipItemStyle} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-      </div>
-
-      {/* 边际效益分析：折线图 + 表格 */}
+      {/* 单价对比 & 边际效益 */}
       {margins.length > 0 && (
         <section className="glass rounded-2xl p-6">
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <TrendingDown className="h-5 w-5 text-cyan-glow" /> 边际效益分析
+            <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
+            {aiVerdictsLoading && (
+              <span className="text-xs font-normal text-cyan-glow flex items-center gap-1 ml-1">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-cyan-glow animate-pulse" /> AI 分析中
+              </span>
+            )}
+            {!aiVerdictsLoading && Object.keys(aiVerdicts).length > 0 && (
+              <span className="text-xs font-normal text-slate-500 ml-1">· AI 解读</span>
+            )}
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            相邻包装档位逐级对比，每步升级多花多少、单价降多少 · 折线斜率越陡 = 边际效益变化越快
+            按总量排序看单价变化 · 相邻档位逐级对比，每步升级多花多少、单价降多少 · 折线斜率越陡 = 边际效益变化越快
           </p>
 
           {/* 折线图：横轴=总量，纵轴=单价。斜率反映边际效益 */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
-            <div className="text-[11px] text-slate-500 mb-2 flex items-center gap-2">
+            <div className="text-sm text-slate-500 mb-2 flex items-center gap-2">
               <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价随总量变化曲线
               <span className="text-slate-600">· 下行=大包装更划算，陡降=边际效益高</span>
             </div>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={mergeVariantSkus(items).map((it) => ({
-                    name: it.name.length > 12 ? it.name.slice(0, 12) + '…' : it.name,
-                    总量: it.totalQuantity,
-                    单价: round6(it.unitPrice),
-                  }))}
-                  margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
-                  <XAxis
-                    dataKey="总量"
-                    type="number"
-                    tick={{ fill: '#64748b', fontSize: 10 }}
-                    tickFormatter={(v) => fmt.num(v)}
-                    label={{ value: '总量', fill: '#64748b', fontSize: 10, position: 'insideBottom', offset: -2 }}
-                  />
-                  <YAxis
-                    tick={{ fill: '#64748b', fontSize: 10 }}
-                    tickFormatter={(v) => `¥${v}`}
-                    width={56}
-                  />
-                  <Tooltip
-                    contentStyle={tooltipStyle}
-                    labelStyle={tooltipLabelStyle}
-                    itemStyle={tooltipItemStyle}
-                    labelFormatter={(v) => `总量 ${fmt.num(Number(v))}`}
-                    formatter={(v: number) => [`¥${v}`, '单价']}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="单价"
-                    stroke="#06b6d4"
-                    strokeWidth={2}
-                    dot={{ fill: '#06b6d4', r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                </LineChart>
+                {(() => {
+                  const chartData = mergeVariantSkus(items).map((it) => {
+                    const { spec } = parseFlavor(it.name)
+                    const label = spec || it.name
+                    return {
+                      name: label.length > 10 ? label.slice(0, 10) + '…' : label,
+                      总量: it.totalQuantity,
+                      单价: round6(it.unitPrice),
+                    }
+                  })
+                  return (
+                    <LineChart
+                      data={chartData}
+                      margin={{ top: 24, right: 24, bottom: 24, left: 8 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
+                      <XAxis
+                        dataKey="总量"
+                        type="number"
+                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tickFormatter={(v) => fmt.num(v)}
+                        label={{ value: '总量', fill: '#64748b', fontSize: 10, position: 'insideBottom', offset: -2 }}
+                      />
+                      <YAxis
+                        tick={{ fill: '#64748b', fontSize: 10 }}
+                        tickFormatter={(v) => `¥${v}`}
+                        width={56}
+                      />
+                      <Tooltip
+                        contentStyle={tooltipStyle}
+                        labelStyle={tooltipLabelStyle}
+                        itemStyle={tooltipItemStyle}
+                        labelFormatter={(v) => `总量 ${fmt.num(Number(v))}`}
+                        formatter={(v: number) => [`¥${v}`, '单价']}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="单价"
+                        stroke="#06b6d4"
+                        strokeWidth={2}
+                        dot={{ fill: '#06b6d4', r: 4 }}
+                        activeDot={{ r: 6 }}
+                        label={(props: { x?: number; y?: number; index?: number }) => {
+                          const { x, y, index } = props
+                          if (x == null || y == null || index == null) return <g />
+                          return (
+                            <text x={x} y={y - 10} fill="#94a3b8" fontSize={10} textAnchor="middle">
+                              {chartData[index]?.name}
+                            </text>
+                          )
+                        }}
+                      />
+                    </LineChart>
+                  )
+                })()}
               </ResponsiveContainer>
             </div>
           </div>
@@ -454,34 +424,48 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-[640px]">
               <thead>
-                <tr className="border-b border-edge text-left text-[10px] text-slate-500">
+                <tr className="border-b border-edge text-left text-sm text-slate-500">
                   <th className="px-2 py-2 font-medium">规格</th>
                   <th className="px-2 py-2 font-medium text-right">多花</th>
                   <th className="px-2 py-2 font-medium text-right">多得</th>
                   <th className="px-2 py-2 font-medium text-right">单价变化</th>
-                  <th className="px-2 py-2 font-medium text-right">每{margins[0]?.unit ?? ''}省/亏</th>
+                  <th className="px-2 py-2 font-medium text-right">
+                    {aiVerdictsLoading ? 'AI 分析中…' : '省/亏'}
+                  </th>
                   <th className="px-2 py-2 font-medium text-center">评级</th>
                 </tr>
               </thead>
               <tbody>
                 {margins.map((m, i) => {
                   const style = GRADE_STYLE[m.grade]
+                  // 拆分规格名：优先显示关键规格部分（如 16g×8袋），口味作为副标题
+                  const { flavor, spec } = parseFlavor(m.toName)
+                  const showShort = spec && spec.length <= 20
+                  // AI 表述优先，回退本地净省/净亏
+                  const aiText = aiVerdicts[m.toId]
+                  const localText = m.netSaving > 0 ? `省 ¥${m.netSaving.toFixed(2)}` : m.netSaving < 0 ? `亏 ¥${Math.abs(m.netSaving).toFixed(2)}` : '持平'
+                  const savingText = aiText ?? (aiVerdictsLoading ? '…' : localText)
                   return (
                     <tr key={i} className="border-b border-edge/50 hover:bg-brand-soft/30 transition-colors">
                       <td className="px-2 py-2.5">
-                        <div className="font-medium truncate max-w-[160px]" title={m.toName}>{m.toName}</div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">{m.verdict}</div>
+                        <div className="font-medium truncate max-w-[220px]" title={m.toName}>
+                          {showShort ? spec : m.toName}
+                        </div>
+                        {showShort && flavor && (
+                          <div className="text-sm text-slate-500 mt-0.5 truncate max-w-[220px]">{flavor}</div>
+                        )}
+                        <div className="text-sm text-slate-500 mt-0.5">{aiText ?? m.verdict}</div>
                       </td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</td>
                       <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-cyan-glow' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
                         {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
                       </td>
-                      <td className={`px-2 py-2.5 text-right tabular ${m.marginalSaving > 0 ? 'text-cyan-glow' : m.marginalSaving < 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                        {m.marginalSaving > 0 ? '省' : m.marginalSaving < 0 ? '亏' : ''} ¥{Math.abs(m.marginalSaving).toFixed(4)}
+                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.netSaving > 0 ? 'text-cyan-glow' : m.netSaving < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                        {savingText}
                       </td>
                       <td className="px-2 py-2.5 text-center">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${style.badge}`}>
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-sm font-semibold ${style.badge}`}>
                           {style.label}
                         </span>
                       </td>
@@ -493,7 +477,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
 
           {/* 图例 */}
-          <div className="mt-4 flex flex-wrap gap-3 text-[10px] text-slate-500">
+          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-500">
             {Object.entries(GRADE_STYLE).map(([k, v]) => (
               <span key={k} className="inline-flex items-center gap-1">
                 <span className={`inline-block w-2.5 h-2.5 rounded-sm ${v.dot}`} />
@@ -554,17 +538,17 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-sm">{cluster.label}</span>
             {cluster.isBest && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
+              <span className="text-sm px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
                 推荐
               </span>
             )}
             {hasFlavors && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">
+              <span className="text-sm px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">
                 {cluster.members.length} 种口味
               </span>
             )}
           </div>
-          <div className="text-[11px] text-slate-500 mt-0.5 tabular">
+          <div className="text-sm text-slate-500 mt-0.5 tabular">
             {cluster.priceSpread > 0
               ? `${fmt.yuan(cluster.minPrice)} ~ ${fmt.yuan(cluster.maxPrice)}`
               : `${fmt.yuan(active.price)}`}{' '}
@@ -573,12 +557,12 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
         </div>
         <div className="text-right shrink-0">
           <div className="text-base font-bold text-cyan-glow tabular">
-            {fmt.price4(cluster.repUnitPrice)}
+            {fmt.priceUnit(cluster.repUnitPrice)}
           </div>
-          <div className="text-[10px] text-slate-500">/{cluster.unit}起</div>
+          <div className="text-sm text-slate-500">/{cluster.unit}起</div>
         </div>
         <div className="hidden sm:block w-24 shrink-0">
-          <div className="text-[10px] text-slate-500 mb-1 text-right tabular">
+          <div className="text-sm text-slate-500 mb-1 text-right tabular">
             {cluster.score.toFixed(0)}分
           </div>
           <div className="h-1.5 rounded-full bg-edge overflow-hidden">
@@ -595,7 +579,7 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
       {/* 簇内口味标签：价格已比完，这里只挑口味 */}
       {hasFlavors && (
         <div className="mt-3 pt-3 border-t border-edge/60">
-          <div className="text-[10px] text-slate-500 mb-2 flex items-center gap-1">
+          <div className="text-sm text-slate-500 mb-2 flex items-center gap-1">
             <ChevronDown className="h-3 w-3" />
             价格结构相同，挑个口味即可
             {cluster.priceSpread > 0 && (
@@ -625,10 +609,10 @@ function ClusterCard({ cluster, idx }: { cluster: SkuCluster; idx: number }) {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.15 }}
-              className="text-[11px] text-slate-400 mt-2"
+              className="text-sm text-slate-400 mt-2"
             >
               已选 <span className="text-brand-deep font-medium">{active.name}</span>：
-              {fmt.yuan(active.price)}，每{active.unit} {fmt.price4(active.unitPrice)}
+              {fmt.yuan(active.price)}，每{active.unit} {fmt.priceUnit(active.unitPrice)}
             </motion.p>
           </AnimatePresence>
         </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useState } from 'react'
 import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
@@ -78,7 +78,7 @@ export default function App() {
               <h1 className="font-bold text-base sm:text-lg tracking-tight truncate">
                 规格决策台
               </h1>
-              <p className="text-[11px] text-slate-500 hidden sm:block">
+              <p className="text-sm text-slate-500 hidden sm:block">
                 多 SKU 比价 · 找出最划算的那一个
               </p>
             </div>

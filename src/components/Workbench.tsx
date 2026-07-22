@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
@@ -36,6 +36,39 @@ const PARAM_TYPE_LABELS: Record<ParamType, string> = {
   'boolean': '是/否',
   'text': '评级',
 }
+
+/**
+ * 权重档位：用语义标签替代 0-100 滑块，用户无需纠结具体数值。
+ * 档位值参与 scoreItems 的归一化加权（相对比例生效，绝对值无所谓）。
+ */
+const WEIGHT_TIERS = [
+  { label: '忽略', value: 0 },
+  { label: '参考', value: 5 },
+  { label: '一般', value: 15 },
+  { label: '重要', value: 30 },
+  { label: '关键', value: 50 },
+] as const
+
+/** 数值型维度才需要单位；boolean/text 用不到 */
+const isNumericType = (t: ParamType) => t === 'higher-better' || t === 'lower-better'
+
+/** 第一分组维度（口味/颜色/型号）行底色调色板 */
+const FLAVOR_COLORS = [
+  'bg-sky-100/60 dark:bg-sky-900/20',
+  'bg-amber-100/60 dark:bg-amber-900/20',
+  'bg-emerald-100/60 dark:bg-emerald-900/20',
+  'bg-violet-100/60 dark:bg-violet-900/20',
+  'bg-rose-100/60 dark:bg-rose-900/20',
+  'bg-cyan-100/60 dark:bg-cyan-900/20',
+  'bg-orange-100/60 dark:bg-orange-900/20',
+  'bg-teal-100/60 dark:bg-teal-900/20',
+]
+
+/** 参数维度列分组色条颜色（inline style） */
+const GROUP_BAR_COLORS = [
+  '#0ea5e9', '#f59e0b', '#10b981', '#a855f7',
+  '#f43f5e', '#06b6d4', '#f97316', '#14b8a6',
+]
 
 export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange, onLoadScene }: Props) {
   const [scanning, setScanning] = useState(false)
@@ -247,6 +280,31 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
+  // 分组上色：第一维度（口味/颜色/型号）用行底色，参数维度列用左侧色条
+  const flavorColorMap = new Map<string, string>()
+  let flavorColorIdx = 0
+  for (const s of skus) {
+    const f = parseFlavor(s.name).flavor || ''
+    if (f && !flavorColorMap.has(f)) {
+      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
+      flavorColorIdx++
+    }
+  }
+  const dimColorMaps = config.dims.map((d) => {
+    const map = new Map<string, string>()
+    let idx = 0
+    for (const s of skus) {
+      const v = String(s.params?.[d.id] ?? '')
+      if (v && !map.has(v)) {
+        map.set(v, GROUP_BAR_COLORS[idx % GROUP_BAR_COLORS.length])
+        idx++
+      }
+    }
+    return map
+  })
+  const dimHasGroup = dimColorMaps.map((m) => m.size >= 2)
+  const hasAnyFlavor = skus.some((s) => parseFlavor(s.name).flavor)
+
   return (
     <div className="space-y-6">
       {/* 拖入全屏高亮遮罩 */}
@@ -280,7 +338,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <p className="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5">
             <UploadCloud className="h-3.5 w-3.5 text-cyan-glow/70" />
             也可以直接把商品截图<b className="text-slate-600 font-medium">拖到页面任意位置</b>，或截图后按
-            <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-[10px] font-mono">Ctrl+V</kbd>
+            <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-sm font-mono">Ctrl+V</kbd>
             粘贴识别。
             <span className="text-cyan-glow/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
           </p>
@@ -353,7 +411,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                     : 'AI 正在识别图片中的所有规格与价格…'}
                 </span>
               </div>
-              <div className="mt-1.5 flex items-center gap-3 text-[11px] text-slate-500">
+              <div className="mt-1.5 flex items-center gap-3 text-sm text-slate-500">
                 <span className="tabular">已等待 <span className={scanElapsed > 30 ? 'text-amber-400 font-semibold' : 'text-cyan-glow'}>{scanElapsed}</span> 秒</span>
                 {(() => {
                   const ai = loadAiConfig()
@@ -404,7 +462,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <div className="flex items-center gap-2">
             <Sliders className="h-4 w-4 text-cyan-glow" />
             <span className="text-sm font-semibold">参数维度与权重</span>
-            <span className="text-[11px] text-slate-500">
+            <span className="text-sm text-slate-500">
               {config.dims.length === 0
                 ? '（仅按价格比价，点击展开添加维度）'
                 : `共 ${config.dims.length} 个维度 + 价格`}
@@ -434,14 +492,22 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       disabled
                       className="field py-1.5 text-xs flex-1 opacity-70"
                     />
-                    <span className="text-[10px] text-slate-500 w-16 text-center">越小越好</span>
-                    <input
-                      type="range" min={0} max={100}
-                      value={config.priceWeight}
-                      onChange={(e) => onConfigChange({ ...config, priceWeight: parseInt(e.target.value) })}
-                      className="flex-1 min-w-[80px] accent-cyan-glow"
-                    />
-                    <span className="text-xs tabular text-cyan-glow w-8 text-right">{config.priceWeight}</span>
+                    <span className="text-sm text-slate-500 w-16 text-center">越小越好</span>
+                    <div className="flex items-center gap-0.5 rounded-lg bg-white/50 dark:bg-emerald-950/30 p-0.5">
+                      {WEIGHT_TIERS.map((t) => (
+                        <button
+                          key={t.value}
+                          onClick={() => onConfigChange({ ...config, priceWeight: t.value })}
+                          className={`px-2 py-1 text-sm rounded transition-all ${
+                            config.priceWeight === t.value
+                              ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                              : 'text-slate-500 hover:text-brand-deep'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {/* 用户自定义维度 */}
@@ -453,13 +519,15 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                         placeholder="维度名（如 电池容量）"
                         className="field py-1.5 text-xs flex-1 min-w-0"
                       />
-                      <input
-                        value={dim.unit ?? ''}
-                        onChange={(e) => updateDim(dim.id, { unit: e.target.value })}
-                        placeholder="单位"
-                        className="field py-1.5 text-xs w-14"
-                        title="单位（可选，如 mAh）"
-                      />
+                      {isNumericType(dim.type) && (
+                        <input
+                          value={dim.unit ?? ''}
+                          onChange={(e) => updateDim(dim.id, { unit: e.target.value })}
+                          placeholder="如 mAh"
+                          className="field py-1.5 text-xs w-16"
+                          title="单位（可选，如 mAh / g / mm）"
+                        />
+                      )}
                       <select
                         value={dim.type}
                         onChange={(e) => updateDim(dim.id, { type: e.target.value as ParamType })}
@@ -486,13 +554,21 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                           title="评级序列，从优到劣，用逗号分隔"
                         />
                       )}
-                      <input
-                        type="range" min={0} max={100}
-                        value={dim.weight}
-                        onChange={(e) => updateDim(dim.id, { weight: parseInt(e.target.value) })}
-                        className="flex-1 min-w-[80px] accent-cyan-glow"
-                      />
-                      <span className="text-xs tabular text-cyan-glow w-8 text-right">{dim.weight}</span>
+                      <div className="flex items-center gap-0.5 rounded-lg bg-white/50 dark:bg-emerald-950/30 p-0.5">
+                        {WEIGHT_TIERS.map((t) => (
+                          <button
+                            key={t.value}
+                            onClick={() => updateDim(dim.id, { weight: t.value })}
+                            className={`px-2 py-1 text-sm rounded transition-all ${
+                              dim.weight === t.value
+                                ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                                : 'text-slate-500 hover:text-brand-deep'
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
                       <button
                         onClick={() => removeDim(dim.id)}
                         className="text-slate-600 hover:text-red-400 transition-colors p-1"
@@ -556,7 +632,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   )}
                   <div className="mt-2 flex flex-wrap gap-2 justify-center">
                     {pieData.map((d, i) => (
-                      <span key={i} className="flex items-center gap-1 text-[10px] text-slate-500">
+                      <span key={i} className="flex items-center gap-1 text-sm text-slate-500">
                         <span className="h-2 w-2 rounded-sm" style={{ background: d.color }} />
                         {d.name}
                       </span>
@@ -573,7 +649,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       <div className="glass rounded-2xl overflow-hidden">
         {/* 分组折叠工具栏 */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
-          <span className="text-[11px] text-slate-500">分组折叠：</span>
+          <span className="text-sm text-slate-500">分组折叠：</span>
           {(() => {
             // 动态构建分组选项，并过滤掉无区分意义的（所有 SKU 在该维度值相同）
             const allOptions: Array<{ key: string; label: string; getValue: (s: Sku) => string }> = [
@@ -618,12 +694,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           {groupBy && (
             <button
               onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}
-              className="text-[11px] text-slate-500 hover:text-slate-600 ml-1"
+              className="text-sm text-slate-500 hover:text-slate-600 ml-1"
             >
               取消分组
             </button>
           )}
-          <span className="text-[10px] text-slate-600 ml-auto hidden sm:block">
+          <span className="text-sm text-slate-600 ml-auto hidden sm:block">
             折叠后只看不关心的维度，聚焦对比
           </span>
         </div>
@@ -631,7 +707,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[960px]">
             <thead>
-              <tr className="border-b border-edge text-left text-[11px] text-slate-500">
+              <tr className="border-b border-edge text-left text-sm text-slate-500">
                 <th className="px-3 py-3 font-medium w-8">#</th>
                 <th className="px-3 py-3 font-medium w-28">{flavorLabel}</th>
                 <th className="px-3 py-3 font-medium min-w-[150px]">规格（重量×数量）</th>
@@ -642,7 +718,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                 {config.dims.map((dim) => (
                   <th key={dim.id} className="px-3 py-3 font-medium w-24">
                     {dim.label}
-                    {dim.unit && <span className="text-[10px] text-slate-500 ml-1">({dim.unit})</span>}
+                    {dim.unit && <span className="text-sm text-slate-500 ml-1">({dim.unit})</span>}
                   </th>
                 ))}
                 <th className="px-3 py-3 font-medium w-24 text-right">总量</th>
@@ -670,6 +746,10 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       remove={remove}
                       dims={config.dims}
                       flavorLabel={flavorLabel}
+                      flavorColorMap={flavorColorMap}
+                      dimColorMaps={dimColorMaps}
+                      dimHasGroup={dimHasGroup}
+                      hasAnyFlavor={hasAnyFlavor}
                     />
                   )
                 },
@@ -719,9 +799,13 @@ interface GroupRowsProps {
   remove: (id: string) => void
   dims: ParamDim[]
   flavorLabel: string
+  flavorColorMap: Map<string, string>
+  dimColorMaps: Map<string, string>[]
+  dimHasGroup: boolean[]
+  hasAnyFlavor: boolean
 }
 
-function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims, flavorLabel }: GroupRowsProps) {
+function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: GroupRowsProps) {
   // 列数：# + 口味 + 规格 + 总价 + 含量 + 单位 + 数量 + N个维度 + 总量 + 单价 + 操作
   const colCount = 10 + dims.length
   return (
@@ -761,6 +845,10 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
               indented={isGrouped}
               dims={dims}
               flavorLabel={flavorLabel}
+              flavorColorMap={flavorColorMap}
+              dimColorMaps={dimColorMaps}
+              dimHasGroup={dimHasGroup}
+              hasAnyFlavor={hasAnyFlavor}
             />
           )
         })}
@@ -779,9 +867,13 @@ interface RowFieldsProps {
   indented: boolean
   dims: ParamDim[]
   flavorLabel: string
+  flavorColorMap: Map<string, string>
+  dimColorMaps: Map<string, string>[]
+  dimHasGroup: boolean[]
+  hasAnyFlavor: boolean
 }
 
-function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavorLabel }: RowFieldsProps) {
+function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: RowFieldsProps) {
   const total = s.quantity * Math.max(1, s.packs)
   const up = total > 0 && s.price > 0 ? s.price / total : 0
   const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
@@ -856,6 +948,9 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
     )
   }
 
+  // 同口味行用同底色，仅多口味时上色；待补充行保留警告色
+  const flavorBg = !incomplete && hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
+
   return (
     <motion.tr
       layout
@@ -865,7 +960,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
       transition={{ duration: 0.15 }}
       className={`border-b border-edge/50 group transition-colors ${
         incomplete ? 'bg-amber-400/[0.03]' : 'hover:bg-brand-soft/50'
-      }`}
+      } ${flavorBg}`}
     >
       <td className="px-3 py-2 text-slate-500 font-mono text-xs">
         {indented && <span className="text-edge mr-1">·</span>}
@@ -922,12 +1017,20 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
           className="field py-1.5 text-xs tabular"
         />
       </td>
-      {/* 动态维度列 */}
-      {dims.map((dim) => (
-        <td key={dim.id} className="px-3 py-2">
-          {renderDimInput(dim)}
-        </td>
-      ))}
+      {/* 动态维度列：有分组时加左侧色条 */}
+      {dims.map((dim, dIdx) => {
+        const v = String(s.params?.[dim.id] ?? '')
+        const barColor = dimHasGroup[dIdx] ? dimColorMaps[dIdx].get(v) : undefined
+        return (
+          <td
+            key={dim.id}
+            className="px-3 py-2"
+            style={barColor ? { borderLeft: `3px solid ${barColor}` } : undefined}
+          >
+            {renderDimInput(dim)}
+          </td>
+        )
+      })}
       <td className="px-3 py-2 text-right text-xs text-slate-400 tabular whitespace-nowrap">
         {total > 0 ? `${fmt.num(total)}${s.unit}` : '—'}
       </td>
@@ -935,7 +1038,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         <span className={`text-xs font-semibold tabular ${up > 0 ? 'text-cyan-glow' : 'text-slate-600'}`}>
           {up > 0 ? fmt.price4(up) : '待补充'}
         </span>
-        {up > 0 && <span className="text-[10px] text-slate-500">/{s.unit}</span>}
+        {up > 0 && <span className="text-sm text-slate-500">/{s.unit}</span>}
       </td>
       <td className="px-3 py-2 text-right">
         <button

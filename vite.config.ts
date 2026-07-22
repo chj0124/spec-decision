@@ -19,6 +19,40 @@ function aiProxyPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || ''
+        // 获取可用模型列表（GET /models 代理）
+        if (url.startsWith('/api/ai-models')) {
+          if (req.method !== 'POST') {
+            res.statusCode = 405
+            res.end('Method Not Allowed')
+            return
+          }
+          try {
+            const chunks: Buffer[] = []
+            for await (const chunk of req) {
+              chunks.push(chunk as Buffer)
+            }
+            const { baseUrl, apiKey } = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+            if (!baseUrl || !apiKey) {
+              res.statusCode = 400
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ error: '缺少 baseUrl/apiKey' }))
+              return
+            }
+            const targetUrl = `${String(baseUrl).replace(/\/$/, '')}/models`
+            const upstream = await fetch(targetUrl, {
+              headers: { Authorization: `Bearer ${apiKey}` },
+            })
+            const text = await upstream.text()
+            res.statusCode = upstream.status
+            res.setHeader('Content-Type', 'application/json')
+            res.end(text)
+          } catch (e: any) {
+            res.statusCode = 502
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ error: e?.message ?? '上游请求失败' }))
+          }
+          return
+        }
         if (!url.startsWith('/api/ai-chat')) {
           return next()
         }

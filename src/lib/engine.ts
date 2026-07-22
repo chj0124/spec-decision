@@ -217,6 +217,18 @@ export function scoreItems(
 }
 
 /**
+ * 取规格的短名用于结论文案：优先用 parseFlavor 拆出的 spec 部分（如 "16g×8袋"），
+ * spec 太长或缺失时退化为结构化字段拼接，保证关键规格信息始终可见。
+ */
+function shortName(s: ComputedSku): string {
+  const { flavor, spec } = parseFlavor(s.name)
+  if (spec && spec.length <= 20) return spec
+  if (flavor && spec) return spec.length > 20 ? `${s.quantity}${s.unit}×${s.packs}件` : spec
+  // 无 flavor 或无 spec：用结构化字段
+  return `${s.quantity}${s.unit}×${s.packs}件`
+}
+
+/**
  * 生成边际效益分析：真正的"边际"——相邻包装档位对比。
  *
  * 1) 先合并仅口味/颜色不同（同 price + totalQuantity + unit）的条目
@@ -250,6 +262,8 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
         ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
         : 0
     const marginalSaving = round(base.unitPrice - item.unitPrice, 6)
+    // 净省/净亏：多得的量按前档单价折算价值 - 多花的钱。直观反映"买这个总共能省多少"
+    const netSaving = round(extraQuantity * base.unitPrice - extraCost, 2)
 
     // 分级
     let grade: MarginGrade
@@ -267,19 +281,22 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
       grade = 'bad'
     }
 
+    // 结论文案用短名（规格部分），避免长规格名被截断后关键信息丢失
+    const baseShort = shortName(base)
+    const netStr = netSaving > 0 ? `净省 ¥${netSaving.toFixed(2)}` : netSaving < 0 ? `净亏 ¥${Math.abs(netSaving).toFixed(2)}` : '持平'
     let verdict = ''
     if (grade === 'great' && extraCost <= 0) {
-      verdict = `比「${base.name}」更便宜还更多，直接闭眼入。`
+      verdict = `比「${baseShort}」更便宜还更多，${netStr}，直接闭眼入。`
     } else if (grade === 'great') {
-      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，单价直降 ${dropPct.toFixed(1)}%，超值。`
+      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，${netStr}，超值。`
     } else if (grade === 'good') {
-      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，单价降 ${dropPct.toFixed(1)}%，划算。`
+      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)} 多得 ${extraQuantity}${item.unit}，${netStr}，划算。`
     } else if (grade === 'fair') {
-      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价仅${dropPct >= 0 ? '降' : '涨'} ${Math.abs(dropPct).toFixed(1)}%，基本持平。`
+      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，基本持平。`
     } else if (grade === 'poor') {
-      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价反而涨 ${Math.abs(dropPct).toFixed(1)}%，小亏。`
+      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，小亏。`
     } else {
-      verdict = `比「${base.name}」多花 ¥${extraCost.toFixed(2)}，单价暴涨 ${Math.abs(dropPct).toFixed(1)}%，明显不划算。`
+      verdict = `比「${baseShort}」多花 ¥${extraCost.toFixed(2)}，${netStr}，明显不划算。`
     }
 
     out.push({
@@ -292,6 +309,7 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
       unit: item.unit,
       unitPriceDropPct: dropPct,
       marginalSaving,
+      netSaving,
       grade,
       worthIt: grade === 'great' || grade === 'good',
       verdict,
@@ -353,7 +371,7 @@ export function buildReasons(best: ComputedSku, items: ComputedSku[]): string[] 
     `综合得分 ${best.score.toFixed(1)} 分，在 ${items.length} 个规格中排名第一。`,
   )
   reasons.push(
-    `每${best.unit}仅 ¥${best.unitPrice.toFixed(4)}（总量 ${best.totalQuantity}${best.unit}），单位成本最低。`,
+    `每${best.unit}仅 ${fmt.priceUnit(best.unitPrice)}（总量 ${best.totalQuantity}${best.unit}），单位成本最低。`,
   )
   if (others.length > 0) {
     const avgOthers =
@@ -533,6 +551,15 @@ export const fmt = {
     if (n >= 0.01) return `¥${n.toFixed(4)}`
     // 极小值：保留足够多的有效位
     return `¥${n.toPrecision(2)}`
+  },
+  /**
+   * 单价友好显示：极小单价（< 0.1 元/单位）改用"分"表达，避免一串小数零。
+   * 例：0.0257 → "2.57分"；0.5 → "¥0.5000"；1.2 → "¥1.2000"
+   */
+  priceUnit: (n: number) => {
+    if (n <= 0) return '0分'
+    if (n < 0.1) return `${(n * 100).toFixed(2)}分`
+    return `¥${n.toFixed(4)}`
   },
   num: (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2)),
   pct: (n: number) => `${n.toFixed(1)}%`,

@@ -58,6 +58,8 @@ export interface MarginInsight {
   unitPriceDropPct: number // 单价下降百分比（正=降价，负=涨价）
   /** 每多买 1 基准单位量所节省的钱（元/单位），正值=省，负值=亏 */
   marginalSaving: number
+  /** 净省/净亏（元）：多得的量按前档单价折算价值 - 多花的钱。正=省，负=亏。比每单位省更直观 */
+  netSaving: number
   /** 分级（更精细的结论，替代原 worthIt 布尔值） */
   grade: MarginGrade
   worthIt: boolean // 保留向后兼容：grade 为 great/good 时为 true

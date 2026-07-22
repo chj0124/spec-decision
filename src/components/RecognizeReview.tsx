@@ -31,6 +31,24 @@ const PARAM_TYPE_LABEL: Record<ParamType, string> = {
   'text': 'A',
 }
 
+/** 口味分组底色调色板：浅色，弱识别度，不影响阅读 */
+const FLAVOR_COLORS = [
+  'bg-sky-100/60 dark:bg-sky-900/20',
+  'bg-amber-100/60 dark:bg-amber-900/20',
+  'bg-emerald-100/60 dark:bg-emerald-900/20',
+  'bg-violet-100/60 dark:bg-violet-900/20',
+  'bg-rose-100/60 dark:bg-rose-900/20',
+  'bg-cyan-100/60 dark:bg-cyan-900/20',
+  'bg-orange-100/60 dark:bg-orange-900/20',
+  'bg-teal-100/60 dark:bg-teal-900/20',
+]
+
+/** 参数维度列分组色条颜色（纯色值，用于 inline style 左侧色条） */
+const GROUP_BAR_COLORS = [
+  '#0ea5e9', '#f59e0b', '#10b981', '#a855f7',
+  '#f43f5e', '#06b6d4', '#f97316', '#14b8a6',
+]
+
 const blank = (): RecognizedSku => ({
   name: '', price: 0, quantity: 0, unit: 'g', packs: 1, confidence: 1,
 })
@@ -114,6 +132,58 @@ export default function RecognizeReview({
   // 简化处理：param 维度多时整行改为可横向滚动
   const paramCols = dimRows.length
 
+  // 口味分组底色：按 flavor 值稳定映射到调色板，相同口味用同色
+  const flavorColorMap = new Map<string, string>()
+  let flavorColorIdx = 0
+  for (const r of rows) {
+    const f = parseFlavor(r.name).flavor || ''
+    if (f && !flavorColorMap.has(f)) {
+      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
+      flavorColorIdx++
+    }
+  }
+
+  // 每个参数维度列也独立分组：value → 色条颜色。仅当该列有 ≥2 个不同值时才上色条。
+  const dimColorMaps = dimRows.map((d) => {
+    const map = new Map<string, string>()
+    let idx = 0
+    for (const r of rows) {
+      const v = String(r.params?.[d.label] ?? '')
+      if (v && !map.has(v)) {
+        map.set(v, GROUP_BAR_COLORS[idx % GROUP_BAR_COLORS.length])
+        idx++
+      }
+    }
+    return map
+  })
+  // 某参数维度列是否有分组意义（出现 ≥2 个不同值）
+  const dimHasGroup = dimColorMaps.map((m) => m.size >= 2)
+
+  // 检测哪些列所有行取值完全相同 → 这些列折叠，在表格上方统一说明
+  // 覆盖：单位、数量、含量、规格描述、价格、各参数维度列
+  const allSame = (getVal: (r: RecognizedSku) => string | number | undefined) =>
+    rows.length > 1 && rows.every((r) => getVal(r) === getVal(rows[0]))
+  const commonUnit = allSame((r) => r.unit) ? rows[0].unit : null
+  const commonPacks = allSame((r) => r.packs) ? rows[0].packs : null
+  const commonQuantity = allSame((r) => r.quantity) ? rows[0].quantity : null
+  // 规格描述全同：含量+单位+数量都一致即视为全同（parseSpec 拼出来必然一致），用 quantity+unit+packs 判定
+  const commonSpec = commonQuantity && commonUnit && commonPacks
+    ? `${commonQuantity}${commonUnit}×${commonPacks}袋` : null
+  const commonPrice = allSame((r) => r.price) ? rows[0].price : null
+  // 每个参数维度列是否全同
+  const commonDimValues = dimRows.map((d) => allSame((r) => String(r.params?.[d.label] ?? '')) ? String(rows[0].params?.[d.label] ?? '') : null)
+  // 是否所有行都无口味（即纯规格商品）→ 不需要分组底色
+  const hasAnyFlavor = rows.some((r) => parseFlavor(r.name).flavor)
+  // 收集所有折叠列的说明文案
+  const foldedNotes: string[] = []
+  if (commonUnit) foldedNotes.push(`单位「${commonUnit}」`)
+  if (commonPacks) foldedNotes.push(`数量「${commonPacks}件」`)
+  if (commonQuantity) foldedNotes.push(`含量「${commonQuantity}」`)
+  if (commonPrice) foldedNotes.push(`总价「¥${commonPrice}」`)
+  dimRows.forEach((d, i) => {
+    if (commonDimValues[i]) foldedNotes.push(`${d.label}「${commonDimValues[i]}」`)
+  })
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -143,22 +213,22 @@ export default function RecognizeReview({
           <h3 className="text-lg font-bold tracking-tight flex items-center gap-2 flex-wrap">
             {source === 'error' ? '识别失败' : isBatch ? '批量识别结果' : '确认识别结果'}
             {source !== 'error' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
                 {rows.length} 个规格
               </span>
             )}
             {isBatch && source !== 'error' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-500 font-semibold">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-500 font-semibold">
                 {images.length} 张图
               </span>
             )}
             {category && source !== 'error' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-brand-soft border border-edge text-slate-600 font-medium inline-flex items-center gap-1">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-brand-soft border border-edge text-slate-600 font-medium inline-flex items-center gap-1">
                 <Tag className="h-3 w-3" /> {category}
               </span>
             )}
             {hasDims && source !== 'error' && (
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 font-medium inline-flex items-center gap-1">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 font-medium inline-flex items-center gap-1">
                 <Sliders className="h-3 w-3" /> {paramCols} 个参数维度
               </span>
             )}
@@ -168,8 +238,8 @@ export default function RecognizeReview({
               <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-red-600 mb-1">视觉模型调用失败</p>
-                <p className="text-[11px] text-red-500 leading-relaxed break-all">{note}</p>
-                <p className="text-[11px] text-slate-500 mt-2">
+                <p className="text-sm text-red-500 leading-relaxed break-all">{note}</p>
+                <p className="text-sm text-slate-500 mt-2">
                   请到「AI 设置」检查配置：
                   <br />1. Base URL / API Key 是否正确
                   <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-cyan-glow">qwen-vl-plus</code> / <code className="font-mono text-cyan-glow">glm-4v-flash</code> / <code className="font-mono text-cyan-glow">gpt-4o-mini</code>
@@ -203,13 +273,13 @@ export default function RecognizeReview({
       {hasDims && source !== 'error' && (
         <div className="rounded-xl border border-edge bg-brand-soft/30 p-3 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
+            <span className="text-sm font-semibold text-slate-600 flex items-center gap-1.5">
               <Sliders className="h-3.5 w-3.5 text-cyan-glow" />
               识别到的参数维度（导入后自动建好，可在此微调）
             </span>
             <button
               onClick={addDim}
-              className="text-[11px] text-cyan-glow hover:underline inline-flex items-center gap-1"
+              className="text-sm text-cyan-glow hover:underline inline-flex items-center gap-1"
             >
               <Plus className="h-3 w-3" /> 加维度
             </button>
@@ -220,10 +290,10 @@ export default function RecognizeReview({
                 <input
                   value={d.label}
                   onChange={(e) => updateDim(i, { label: e.target.value })}
-                  className="text-[11px] bg-transparent w-20 outline-none focus:border-cyan-glow"
+                  className="text-sm bg-transparent w-20 outline-none focus:border-cyan-glow"
                 />
-                {d.unit && <span className="text-[10px] text-slate-500">{d.unit}</span>}
-                <span className="text-[10px] text-cyan-glow font-mono" title={d.type}>
+                {d.unit && <span className="text-sm text-slate-500">{d.unit}</span>}
+                <span className="text-sm text-cyan-glow font-mono" title={d.type}>
                   {PARAM_TYPE_LABEL[d.type]}
                 </span>
                 <button
@@ -236,7 +306,7 @@ export default function RecognizeReview({
               </div>
             ))}
           </div>
-          <p className="text-[10px] text-slate-500">
+          <p className="text-sm text-slate-500">
             符号说明：↑ 越大越好 · ↓ 越小越好 · ✓ 是/否 · A 评级。维度权重导入后默认 20，可在工作台调整。
           </p>
         </div>
@@ -244,31 +314,85 @@ export default function RecognizeReview({
 
       {/* 可编辑列表（横向滚动以适配多维度列） */}
       <div className="space-y-2 max-h-[42vh] overflow-y-auto pr-1">
+        {/* 全同列说明：所有取值一致的列统一提示，避免逐行重复显示 */}
+        {foldedNotes.length > 0 && (
+          <div className="text-xs text-slate-500 mb-1 flex items-start gap-1.5">
+            <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>所有规格的 {foldedNotes.join('、')} 均一致，已折叠这些列。如有差异会自动展开。</span>
+          </div>
+        )}
+        {/* 分组图例：第一列（口味/颜色/型号）底色 + 参数维度列色条 */}
+        {((hasAnyFlavor && flavorColorMap.size > 1) || dimHasGroup.some(Boolean)) && (
+          <div className="text-xs text-slate-500 mb-1 flex items-center gap-1.5 flex-wrap">
+            {hasAnyFlavor && flavorColorMap.size > 1 && (
+              <>
+                <span>{flavorLabel}配色：</span>
+                {[...flavorColorMap.entries()].map(([f, c]) => (
+                  <span key={f} className={`px-1.5 py-0.5 rounded ${c} text-xs`}>{f}</span>
+                ))}
+              </>
+            )}
+            {dimHasGroup.map((has, idx) => has && (
+              <span key={idx} className="inline-flex items-center gap-1 ml-2">
+                <span className="text-slate-500">{dimRows[idx].label}：</span>
+                {[...dimColorMaps[idx].entries()].map(([v, c]) => (
+                  <span key={v} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs">
+                    <span className="inline-block w-3 h-3 rounded-sm" style={{ background: c }} />
+                    {v}
+                  </span>
+                ))}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="overflow-x-auto">
-          <div className="min-w-full" style={{ minWidth: paramCols > 0 ? `${520 + paramCols * 110}px` : '100%' }}>
-            {/* 表头 */}
-            <div
-              className="hidden sm:grid gap-2 px-3 text-[10px] text-slate-500 font-medium mb-1"
-              style={{ gridTemplateColumns: `2fr 3fr 2fr 2fr 1fr 1fr${paramCols > 0 ? ` repeat(${paramCols}, 1.2fr)` : ''} 0.5fr` }}
-            >
-              <span>{flavorLabel}</span>
-              <span>规格（重量×数量）</span>
-              <span>总价 ¥</span>
-              <span>含量</span>
-              <span>单位</span>
-              <span>数量</span>
-              {dimRows.map((d, i) => (
-                <span key={i} className="text-cyan-glow/80" title={`${d.label} ${PARAM_TYPE_LABEL[d.type]}`}>
-                  {d.label}{d.unit ? `(${d.unit})` : ''} {PARAM_TYPE_LABEL[d.type]}
-                </span>
-              ))}
-              <span />
-            </div>
+          <div className="min-w-full" style={{ minWidth: paramCols > 0 ? `${420 + paramCols * 110}px` : '100%' }}>
+            {/* 表头：动态构建列模板，全同列省略 */}
+            {(() => {
+              // 按顺序构建列定义：flavor 规格 价格 含量 [单位] [数量] [参数列...] 操作
+              const cols: string[] = ['2fr', '3fr']
+              if (!commonPrice) cols.push('2fr')
+              if (!commonQuantity) cols.push('2fr')
+              if (!commonUnit) cols.push('1fr')
+              if (!commonPacks) cols.push('1fr')
+              dimRows.forEach((_, i) => { if (!commonDimValues[i]) cols.push('1.2fr') })
+              cols.push('0.5fr')
+              const tpl = cols.join(' ')
+              return (
+                <div
+                  className="hidden sm:grid gap-2 px-3 text-sm text-slate-500 font-medium mb-1"
+                  style={{ gridTemplateColumns: tpl }}
+                >
+                  <span>{flavorLabel}</span>
+                  <span>规格（重量×数量）</span>
+                  {!commonPrice && <span>总价 ¥</span>}
+                  {!commonQuantity && <span>含量</span>}
+                  {!commonUnit && <span>单位</span>}
+                  {!commonPacks && <span>数量</span>}
+                  {dimRows.map((d, i) => !commonDimValues[i] && (
+                    <span key={i} className="text-cyan-glow/80" title={`${d.label} ${PARAM_TYPE_LABEL[d.type]}`}>
+                      {d.label}{d.unit ? `(${d.unit})` : ''} {PARAM_TYPE_LABEL[d.type]}
+                    </span>
+                  ))}
+                  <span />
+                </div>
+              )
+            })()}
 
             <AnimatePresence initial={false}>
               {rows.map((r, i) => {
                 const low = r.confidence < LOW_CONFIDENCE
                 const { flavor, spec } = parseFlavor(r.name)
+                // 同口味行用同底色，仅在存在多口味时才上色（纯规格商品不上色）
+                const flavorBg = hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
+                // 动态构建列模板，与表头一致
+                const cols: string[] = ['2fr', '3fr']
+                if (!commonPrice) cols.push('2fr')
+                if (!commonQuantity) cols.push('2fr')
+                if (!commonUnit) cols.push('1fr')
+                if (!commonPacks) cols.push('1fr')
+                dimRows.forEach((_, idx) => { if (!commonDimValues[idx]) cols.push('1.2fr') })
+                cols.push('0.5fr')
                 return (
                   <motion.div
                     key={i}
@@ -281,8 +405,8 @@ export default function RecognizeReview({
                       low
                         ? 'border-amber-400/50 bg-amber-400/5'
                         : 'border-edge bg-brand-soft/50'
-                    }`}
-                    style={{ gridTemplateColumns: `2fr 3fr 2fr 2fr 1fr 1fr${paramCols > 0 ? ` repeat(${paramCols}, 1.2fr)` : ''} 0.5fr` }}
+                    } ${flavorBg && !low ? flavorBg : ''}`}
+                    style={{ gridTemplateColumns: cols.join(' ') }}
                   >
                     {/* 口味/型号/颜色（根据商品类型自适应） */}
                     <div className="flex items-center gap-1.5">
@@ -310,43 +434,56 @@ export default function RecognizeReview({
                       title="改这里会同步 含量/单位/数量"
                       className="field py-1.5 text-xs font-medium"
                     />
-                    <input
-                      type="number" min={0} step="0.01" value={r.price || ''}
-                      onChange={(e) => update(i, { price: parseFloat(e.target.value) || 0 })}
-                      placeholder="价格"
-                      className="field py-1.5 text-xs tabular"
-                    />
-                    <input
-                      type="number" min={0} value={r.quantity || ''}
-                      onChange={(e) => setField(i, 'quantity', parseFloat(e.target.value) || 0)}
-                      placeholder="含量"
-                      title="改这里会同步规格描述"
-                      className="field py-1.5 text-xs tabular"
-                    />
-                    <input
-                      value={r.unit}
-                      onChange={(e) => setField(i, 'unit', e.target.value)}
-                      placeholder="g"
-                      className="field py-1.5 text-xs"
-                    />
-                    <input
-                      type="number" min={1} value={r.packs || ''}
-                      onChange={(e) => setField(i, 'packs', parseInt(e.target.value) || 1)}
-                      placeholder="数量"
-                      title="改这里会同步规格描述"
-                      className="field py-1.5 text-xs tabular"
-                    />
-                    {/* 动态参数维度列 */}
-                    {dimRows.map((d, idx) => (
+                    {!commonPrice && (
                       <input
-                        key={idx}
-                        value={r.params?.[d.label] ?? ''}
-                        onChange={(e) => updateParam(i, d.label, e.target.value)}
-                        placeholder={d.unit || d.label}
-                        title={`${d.label}（${PARAM_TYPE_LABEL[d.type]}）`}
+                        type="number" min={0} step="0.01" value={r.price || ''}
+                        onChange={(e) => update(i, { price: parseFloat(e.target.value) || 0 })}
+                        placeholder="价格"
                         className="field py-1.5 text-xs tabular"
                       />
-                    ))}
+                    )}
+                    {!commonQuantity && (
+                      <input
+                        type="number" min={0} value={r.quantity || ''}
+                        onChange={(e) => setField(i, 'quantity', parseFloat(e.target.value) || 0)}
+                        placeholder="含量"
+                        title="改这里会同步规格描述"
+                        className="field py-1.5 text-xs tabular"
+                      />
+                    )}
+                    {!commonUnit && (
+                      <input
+                        value={r.unit}
+                        onChange={(e) => setField(i, 'unit', e.target.value)}
+                        placeholder="g"
+                        className="field py-1.5 text-xs"
+                      />
+                    )}
+                    {!commonPacks && (
+                      <input
+                        type="number" min={1} value={r.packs || ''}
+                        onChange={(e) => setField(i, 'packs', parseInt(e.target.value) || 1)}
+                        placeholder="数量"
+                        title="改这里会同步规格描述"
+                        className="field py-1.5 text-xs tabular"
+                      />
+                    )}
+                    {/* 动态参数维度列：全同列折叠；有分组时加左侧色条 */}
+                    {dimRows.map((d, idx) => !commonDimValues[idx] && (() => {
+                      const v = String(r.params?.[d.label] ?? '')
+                      const barColor = dimHasGroup[idx] ? dimColorMaps[idx].get(v) : undefined
+                      return (
+                        <input
+                          key={idx}
+                          value={v}
+                          onChange={(e) => updateParam(i, d.label, e.target.value)}
+                          placeholder={d.unit || d.label}
+                          title={`${d.label}（${PARAM_TYPE_LABEL[d.type]}）`}
+                          className="field py-1.5 text-xs tabular"
+                          style={barColor ? { borderLeft: `3px solid ${barColor}`, paddingLeft: '8px' } : undefined}
+                        />
+                      )
+                    })())}
                     <button
                       onClick={() => remove(i)}
                       className="justify-self-end text-slate-600 hover:text-red-400 transition-colors p-1"
@@ -372,7 +509,7 @@ export default function RecognizeReview({
 
       {/* 底部操作 */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1 border-t border-edge">
-        <p className="text-[11px] text-slate-500">
+        <p className="text-sm text-slate-500">
           {source === 'demo' && '当前为演示识别 · '}
           {source !== 'error' && (
             <>

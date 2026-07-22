@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { AiConfig } from '../lib/ai'
-import { AI_PRESETS, chat } from '../lib/ai'
-import { Settings, X, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Zap } from 'lucide-react'
+import { AI_PRESETS, chat, listModels } from '../lib/ai'
+import { Settings, X, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Zap, RefreshCw, ExternalLink } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 interface Props {
@@ -15,6 +15,12 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
   const [form, setForm] = useState<AiConfig>(config)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const [modelList, setModelList] = useState<string[] | null>(null)
+  const [modelsError, setModelsError] = useState<string | null>(null)
+
+  // 当前 baseUrl 对应的预设（用于显示"访问控制台"链接）
+  const matchedPreset = AI_PRESETS.find((p) => p.baseUrl && p.baseUrl === form.baseUrl)
 
   // 弹窗打开时同步外部 config
   if (open && form !== config && !testing) {
@@ -49,6 +55,20 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
     onClose()
   }
 
+  const fetchModels = async () => {
+    setModelsLoading(true)
+    setModelsError(null)
+    setModelList(null)
+    try {
+      const list = await listModels(form)
+      setModelList(list)
+    } catch (e: any) {
+      setModelsError(e.message ?? '获取失败')
+    } finally {
+      setModelsLoading(false)
+    }
+  }
+
   return (
     <AnimatePresence>
       {open && (
@@ -81,7 +101,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
 
             {/* 预设服务商 */}
             <div className="mb-4">
-              <span className="text-[11px] text-slate-500 mb-1.5 block">服务商（选择后自动填地址与模型）</span>
+              <span className="text-sm text-slate-500 mb-1.5 block">服务商（选择后自动填地址与模型）</span>
               <div className="flex flex-wrap gap-1.5">
                 {AI_PRESETS.map((p) => (
                   <button
@@ -101,7 +121,20 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
 
             <div className="space-y-3">
               <label className="block">
-                <span className="text-[11px] text-slate-500 mb-1 block">接口地址 Base URL</span>
+                <span className="text-sm text-slate-500 mb-1 flex items-center gap-1.5">
+                  接口地址 Base URL
+                  {matchedPreset?.consoleUrl && (
+                    <a
+                      href={matchedPreset.consoleUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 text-cyan-glow hover:underline text-xs"
+                      title={`${matchedPreset.label} 控制台 · 获取 API Key`}
+                    >
+                      获取 API Key <ExternalLink className="h-3 w-3" />
+                    </a>
+                  )}
+                </span>
                 <input
                   value={form.baseUrl}
                   onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
@@ -110,7 +143,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                 />
               </label>
               <label className="block">
-                <span className="text-[11px] text-slate-500 mb-1 block">API Key</span>
+                <span className="text-sm text-slate-500 mb-1 block">API Key</span>
                 <input
                   type="password"
                   value={form.apiKey}
@@ -119,19 +152,54 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                   className="field text-xs font-mono"
                 />
               </label>
-              <label className="block">
-                <span className="text-[11px] text-slate-500 mb-1 block">模型 Model</span>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm text-slate-500">模型 Model</span>
+                  <button
+                    onClick={fetchModels}
+                    disabled={modelsLoading || !form.apiKey || !form.baseUrl}
+                    className="inline-flex items-center gap-1 text-xs text-cyan-glow hover:underline disabled:opacity-40 disabled:no-underline"
+                    title="从服务商拉取可用模型列表"
+                  >
+                    {modelsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                    获取可用模型
+                  </button>
+                </div>
                 <input
                   value={form.model}
                   onChange={(e) => setForm({ ...form, model: e.target.value })}
                   placeholder="deepseek-chat"
                   className="field text-xs font-mono"
                 />
-              </label>
+                {/* 模型列表 */}
+                {modelList && modelList.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1 max-h-28 overflow-y-auto p-1.5 rounded-lg border border-edge bg-brand-soft/30">
+                    {modelList.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setForm({ ...form, model: m })}
+                        className={`px-2 py-0.5 rounded text-xs font-mono transition-all ${
+                          form.model === m
+                            ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                            : 'text-slate-500 hover:bg-brand-soft/60 hover:text-brand-deep'
+                        }`}
+                        title={`点击选用 ${m}`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {modelsError && (
+                  <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3 shrink-0" /> {modelsError}
+                  </p>
+                )}
+              </div>
               <label className="block">
-                <span className="text-[11px] text-slate-500 mb-1 block flex items-center gap-1">
+                <span className="text-sm text-slate-500 mb-1 block flex items-center gap-1">
                   视觉模型 Vision Model
-                  <span className="text-[10px] text-slate-400">（用于截图识别，留空则用上面的 Model）</span>
+                  <span className="text-sm text-slate-400">（用于截图识别，留空则用上面的 Model）</span>
                 </span>
                 <input
                   value={form.visionModel ?? ''}
@@ -139,7 +207,28 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                   placeholder="qwen-vl-plus / glm-4v-flash / gpt-4o-mini"
                   className="field text-xs font-mono"
                 />
-                <span className="text-[10px] text-slate-400 mt-1 block">
+                {/* 视觉模型也支持从已拉取的列表选 */}
+                {modelList && modelList.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                    {modelList
+                      .filter((m) => /v[il]?[so]?n?|vl|4o|vision|image/i.test(m))
+                      .map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setForm({ ...form, visionModel: m })}
+                          className={`px-2 py-0.5 rounded text-xs font-mono transition-all ${
+                            form.visionModel === m
+                              ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                              : 'text-slate-500 hover:bg-brand-soft/60 hover:text-brand-deep'
+                          }`}
+                          title={`点击选用 ${m}`}
+                        >
+                          {m}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                <span className="text-sm text-slate-400 mt-1 block">
                   注意：DeepSeek 不支持视觉。请配通义 qwen-vl-plus / 智谱 glm-4v-flash / OpenAI gpt-4o-mini 等多模态模型。
                 </span>
               </label>
@@ -166,7 +255,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
             {/* 隐私说明 */}
             <div className="mt-5 rounded-xl bg-brand-soft/60 border border-edge p-3 flex gap-2">
               <ShieldCheck className="h-4 w-4 text-cyan-glow shrink-0 mt-0.5" />
-              <p className="text-[11px] text-slate-500 leading-relaxed">
+              <p className="text-sm text-slate-500 leading-relaxed">
                 密钥仅保存在你的浏览器 localStorage，直接由浏览器发往你配置的服务商，不经过任何第三方服务器。
                 清除浏览器数据会一并删除。
               </p>

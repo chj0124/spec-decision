@@ -12,12 +12,12 @@ export interface AiConfig {
 
 const KEY = 'spec-decision:ai-config'
 
-export const AI_PRESETS: Array<{ label: string; baseUrl: string; model: string; visionModel: string }> = [
-  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', visionModel: '' },
-  { label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', visionModel: 'qwen-vl-plus' },
-  { label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', visionModel: 'glm-4v-flash' },
-  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', visionModel: 'gpt-4o-mini' },
-  { label: '自定义', baseUrl: '', model: '', visionModel: '' },
+export const AI_PRESETS: Array<{ label: string; baseUrl: string; model: string; visionModel: string; consoleUrl: string }> = [
+  { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', visionModel: '', consoleUrl: 'https://platform.deepseek.com/api_keys' },
+  { label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', visionModel: 'qwen-vl-plus', consoleUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key' },
+  { label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', visionModel: 'glm-4v-flash', consoleUrl: 'https://open.bigmodel.cn/usercenter/apikeys' },
+  { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', visionModel: 'gpt-4o-mini', consoleUrl: 'https://platform.openai.com/api-keys' },
+  { label: '自定义', baseUrl: '', model: '', visionModel: '', consoleUrl: '' },
 ]
 
 export function loadAiConfig(): AiConfig {
@@ -176,4 +176,46 @@ export async function visionChat(
   // 禁用豆包推理模式（thinking:{"type":"disabled"}），大幅减少响应时间（实测 17.6s → 7.2s，
   // reasoning tokens 降为 0，识别结果正确）。其他 OpenAI 兼容服务商会忽略此参数，无副作用。
   return requestChat(c, model, messages, 0.1, 90000, { thinking: { type: 'disabled' } })
+}
+
+/**
+ * 拉取服务商可用模型列表（OpenAI 兼容 GET /models）。
+ * 用于"获取可用模型"按钮，避免用户手动查文档填模型名。
+ */
+export async function listModels(overrideConfig?: AiConfig): Promise<string[]> {
+  const c = overrideConfig ?? loadAiConfig()
+  if (!c.apiKey || !c.baseUrl) throw new Error('请先填写 Base URL 和 API Key')
+
+  const isDev = import.meta.env.DEV
+  // dev 模式走代理；生产模式直连。GET /models 是标准 OpenAI 接口，多数兼容服务商都支持。
+  const url = isDev
+    ? '/api/ai-models'
+    : `${c.baseUrl.replace(/\/$/, '')}/models`
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20000)
+
+  let resp: Response
+  try {
+    resp = await fetch(url, {
+      method: isDev ? 'POST' : 'GET',
+      headers: isDev
+        ? { 'Content-Type': 'application/json' }
+        : { Authorization: `Bearer ${c.apiKey}` },
+      body: isDev ? JSON.stringify({ baseUrl: c.baseUrl, apiKey: c.apiKey }) : undefined,
+      signal: controller.signal,
+    })
+  } catch (e: any) {
+    clearTimeout(timer)
+    throw new Error('网络请求失败，请检查 Base URL 是否正确')
+  }
+  clearTimeout(timer)
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => '')
+    throw new Error(`获取模型失败 ${resp.status}: ${t.slice(0, 120)}`)
+  }
+  const data = await resp.json()
+  const list: string[] = (data?.data ?? []).map((m: any) => m.id).filter(Boolean)
+  if (list.length === 0) throw new Error('服务商未返回模型列表')
+  return list.sort()
 }
