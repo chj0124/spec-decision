@@ -8,6 +8,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ComposedChart, Line,
 } from 'recharts'
 
 interface Props {
@@ -393,48 +394,45 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            柱状图按单价从高到低排列 · 红色=最贵，绿色=最便宜 · 柱顶显示单价
+            双轴合一图：青柱=单价，橙柱=升档的边际成本（每多买 1 基准单位花多少），绿线=相对上一档单价降幅% ·
+            按总量升序即升档顺序，绿线断崖处即性价比拐点
           </p>
 
-          {/* 单价柱状图：按单价从高到低排列，颜色编码（最贵红、最便宜绿），柱顶显示规格名 */}
+          {/* 双轴合一图：单价柱（青）+ 边际成本柱（橙）+ 降幅折线（绿，右轴%） */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              <span className="inline-block w-3 h-3 rounded-sm bg-cyan-glow" /> 单价对比 · 从高到低排列
-              <span className="text-slate-600">· 红色=最贵，绿色=最便宜，颜色深浅渐变</span>
+              <span className="inline-block w-3 h-3 rounded-sm bg-cyan-glow" /> 单价（青）
+              <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本（橙）
+              <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
+              <span className="text-slate-600">· 按总量升序=升档顺序</span>
             </div>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
                   const merged = mergeVariantSkus(items)
-                  // 按单价降序排列（从高到低）
-                  const sorted = [...merged].sort((a, b) => b.unitPrice - a.unitPrice)
-                  const prices = sorted.map((m) => m.unitPrice)
-                  const maxPrice = Math.max(...prices)
-                  const minPrice = Math.min(...prices)
-                  const range = maxPrice - minPrice || 1
-                  const chartData = sorted.map((it) => {
-                    const { spec } = parseFlavor(it.name)
-                    const label = spec || it.name
+                  const chartData = merged.map((m, i) => {
+                    const margin = i === 0 ? null : margins.find((x) => x.toId === m.id)
+                    const { spec } = parseFlavor(m.name)
+                    const label =
+                      spec && spec.length <= 20
+                        ? spec.length > 8
+                          ? spec.slice(0, 8) + '…'
+                          : spec
+                        : m.name.length > 8
+                          ? m.name.slice(0, 8) + '…'
+                          : m.name
                     return {
-                      name: label.length > 8 ? label.slice(0, 8) + '…' : label,
-                      fullName: label,
-                      单价: round6(it.unitPrice),
-                      unit: it.unit,
+                      name: label,
+                      单价: round6(m.unitPrice),
+                      边际成本:
+                        margin && margin.extraQuantity > 0
+                          ? round6(margin.extraCost / margin.extraQuantity)
+                          : null,
+                      降幅: margin ? margin.unitPriceDropPct : null,
                     }
                   })
-                  // 单价越高颜色越红，越低越绿；用 HSL 插值
-                  const colorFor = (price: number) => {
-                    // 0=最便宜(绿) → 1=最贵(红)
-                    const t = (price - minPrice) / range
-                    // hue: 140(绿) → 0(红)
-                    const hue = Math.round(140 * (1 - t))
-                    return `hsl(${hue}, 70%, 55%)`
-                  }
                   return (
-                    <BarChart
-                      data={chartData}
-                      margin={{ top: 36, right: 16, bottom: 8, left: 8 }}
-                    >
+                    <ComposedChart data={chartData} margin={{ top: 36, right: 52, bottom: 8, left: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" vertical={false} />
                       <XAxis
                         dataKey="name"
@@ -445,21 +443,36 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         height={64}
                       />
                       <YAxis
+                        yAxisId="price"
                         tick={{ fill: '#64748b', fontSize: 11 }}
                         tickFormatter={(v) => `¥${v}`}
                         width={56}
+                      />
+                      <YAxis
+                        yAxisId="pct"
+                        orientation="right"
+                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        tickFormatter={(v) => `${v}%`}
+                        width={44}
+                        domain={[0, 'dataMax']}
                       />
                       <Tooltip
                         cursor={{ fill: 'rgba(6, 182, 212, 0.08)' }}
                         contentStyle={tooltipStyle}
                         labelStyle={tooltipLabelStyle}
                         itemStyle={tooltipItemStyle}
-                        formatter={(v: number) => [`¥${v}`, '单价']}
+                        formatter={(value, name) => {
+                          const num = typeof value === 'number' ? value : Number(value)
+                          if (name === '降幅') return [`${num}%`, name]
+                          return [`¥${num}`, name]
+                        }}
                       />
                       <Bar
+                        yAxisId="price"
                         dataKey="单价"
+                        fill="#06b6d4"
                         radius={[6, 6, 0, 0]}
-                        maxBarSize={64}
+                        maxBarSize={40}
                         label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
                           const { x, y, width, value } = props
                           if (x == null || y == null || width == null || value == null) return <g />
@@ -479,12 +492,50 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                             </text>
                           )
                         }}
-                      >
-                        {chartData.map((entry, index) => (
-                          <Cell key={index} fill={colorFor(entry.单价)} />
-                        ))}
-                      </Bar>
-                    </BarChart>
+                      />
+                      <Bar
+                        yAxisId="price"
+                        dataKey="边际成本"
+                        fill="#f59e0b"
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={40}
+                        label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
+                          const { x, y, width, value } = props
+                          if (x == null || y == null || width == null || value == null) return <g />
+                          return (
+                            <text
+                              x={x + width / 2}
+                              y={y - 8}
+                              fill="#e2e8f0"
+                              stroke="#0b1220"
+                              strokeWidth={3}
+                              paintOrder="stroke"
+                              fontSize={11}
+                              fontWeight={700}
+                              textAnchor="middle"
+                            >
+                              {fmt.priceUnit(value)}
+                            </text>
+                          )
+                        }}
+                      />
+                      <Line
+                        yAxisId="pct"
+                        dataKey="降幅"
+                        stroke="#22c55e"
+                        strokeWidth={2.4}
+                        dot={{ r: 4, fill: '#22c55e' }}
+                        label={(props: { x?: number; y?: number; value?: number }) => {
+                          const { x, y, value } = props
+                          if (x == null || y == null || value == null) return <g />
+                          return (
+                            <text x={x} y={y - 10} fill="#86efac" fontSize={10} fontWeight={700} textAnchor="middle">
+                              {value}%
+                            </text>
+                          )
+                        }}
+                      />
+                    </ComposedChart>
                   )
                 })()}
               </ResponsiveContainer>
