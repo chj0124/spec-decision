@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 // 关键：禁用 Node fetch 的系统代理读取。
 // 本机有 HTTPS_PROXY=http://127.0.0.1:7897（Clash），Node fetch 默认会走它，
 // 导致视觉请求（大 body）失败或超时。清空环境变量强制直连。
@@ -103,11 +105,11 @@ function aiProxyPlugin(): Plugin {
         }
       })
     },
-  }
+  };
 }
 
 export default defineConfig({
-  plugins: [react(), aiProxyPlugin()],
+  plugins: [react(), aiProxyPlugin(), cloudflare()],
   base: './',
   build: {
     chunkSizeWarningLimit: 900,

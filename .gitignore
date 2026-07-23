@@ -18,3 +18,9 @@ playwright-report/
 # 工作区记忆与构建缓存
 .workbuddy/
 *.tsbuildinfo
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
