@@ -4,16 +4,39 @@
 //
 // 注意：Cloudflare Pages Functions 使用 Fetch API（Request/Response），
 // 与 Vercel 的 api/ai-chat.js（handler(req, res) Node 签名）不同，二者不能混用。
-// 部署到 Cloudflare 时，请确保 Cloudflare 仪表盘的「Functions 目录」为默认的 functions/。
+//
+// 关键修复：必须使用通用 onRequest（而非 onRequestPost）。Cloudflare 在某些情况下
+// 对方法专属 handler（onRequestPost）的 POST 匹配不稳，会回 405（空 body）。
+// 用 onRequest 兜住所有方法，自己判方法，避免被平台甩 405。
 
-export async function onRequestPost({ request }) {
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+}
+
+export async function onRequest(context) {
+  const { request } = context
+
+  // CORS 预检（浏览器跨域才会发；同源一般跳过，但兜底处理无妨）
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS })
+  }
+
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ error: '仅支持 POST 方法' }), {
+      status: 405,
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+    })
+  }
+
   let body
   try {
     body = await request.json()
   } catch {
     return new Response(JSON.stringify({ error: '请求体不是合法 JSON' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   }
 
@@ -21,7 +44,7 @@ export async function onRequestPost({ request }) {
   if (!baseUrl || !apiKey || !model) {
     return new Response(JSON.stringify({ error: '缺少 baseUrl/apiKey/model' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   }
 
@@ -44,13 +67,13 @@ export async function onRequestPost({ request }) {
   } catch (e) {
     return new Response(JSON.stringify({ error: e?.message ?? '上游请求失败' }), {
       status: 502,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   }
 
   const text = await upstream.text()
   return new Response(text, {
     status: upstream.status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS, 'Content-Type': 'application/json' },
   })
 }
