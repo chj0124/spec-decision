@@ -62,7 +62,7 @@ export function getVisionModel(c: AiConfig): string {
 /**
  * 底层请求：OpenAI 兼容的 chat/completions。
  * messages 已构造好（文本或多模态均可）。model 由调用方指定。
- * 统一走同源代理 /api/ai-chat：dev 由 vite 插件转发，生产由 serverless 函数（Vercel）转发，
+ * 统一走同源代理 /api/ai-chat：dev 由 vite 插件转发，生产由 serverless 函数（Vercel api/ 或 Cloudflare Pages functions/）转发，
  * 以此绕过浏览器 CORS。纯静态托管（无代理函数）会优雅失败，由调用方回退到内置示例。
  */
 async function requestChat(
@@ -185,7 +185,7 @@ export async function listModels(overrideConfig?: AiConfig): Promise<string[]> {
   const c = overrideConfig ?? loadAiConfig()
   if (!c.apiKey || !c.baseUrl) throw new Error('请先填写 Base URL 和 API Key')
 
-  // 同源代理 /api/ai-models（dev = vite 插件；生产 = serverless 函数）
+  // 同源代理 /api/ai-models（dev = vite 插件；生产 = serverless 函数：Vercel api/ai-models.js 或 Cloudflare functions/api/ai-models.js）
   const url = '/api/ai-models'
 
   const controller = new AbortController()
