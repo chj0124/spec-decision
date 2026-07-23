@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
@@ -14,6 +14,42 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
+
+/**
+ * 根据内容自动调整宽度的 input。
+ * 用一个隐藏的 span（复制 input 的 className 保证字体/padding 一致）测量文本宽度，
+ * 把 input 的 width 设为测量值 + 余量。这样维度名、单位、levels 输入框能随内容伸缩，
+ * 短文字不浪费空间，长文字不会被截断。
+ */
+function AutoWidthInput({
+  value,
+  minWidth = 60,
+  extra = 12,
+  className = '',
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement> & { minWidth?: number; extra?: number }) {
+  const spanRef = useRef<HTMLSpanElement>(null)
+  const [w, setW] = useState(minWidth)
+  useEffect(() => {
+    if (spanRef.current) setW(Math.max(minWidth, spanRef.current.offsetWidth + extra))
+  }, [value, props.placeholder, minWidth, extra, className])
+  return (
+    <>
+      {/* 测量用隐藏 span：复制 input 的 className（含字体/padding）保证测量准确。
+         用 inline style width:auto 强制覆盖 .field 的 w-full，否则 span 撑满父宽度测不准。
+         class 级的 w-auto 无法覆盖 @apply w-full（CSS 层级问题），只能靠 inline style。 */}
+      <span
+        ref={spanRef}
+        aria-hidden
+        className={`${className} invisible absolute whitespace-pre pointer-events-none inline-block border border-transparent`}
+        style={{ width: 'auto', maxWidth: 'none' }}
+      >
+        {String(value ?? '') || props.placeholder || ''}
+      </span>
+      <input {...props} value={value} className={className} style={{ width: w }} />
+    </>
+  )
+}
 
 interface Props {
   skus: Sku[]
@@ -106,13 +142,16 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   // AI 生成示例：调用 generator（已配置 AI 则实时生成，否则回退内置真实模板）
   const [genLoading, setGenLoading] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
+  const [genSummary, setGenSummary] = useState<string | null>(null)
   const handleGenExample = async () => {
     setGenLoading(true)
     setGenError(null)
+    setGenSummary(null)
     try {
-      const { skus: g, config: c, source, note } = await generateExample()
+      const { skus: g, config: c, source, note, summary } = await generateExample()
       onChange(g)
       onConfigChange(c)
+      setGenSummary(summary)
       if (source === 'fallback' && note) {
         setGenError(note)
       }
@@ -393,6 +432,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         </div>
 
       {/* AI 生成示例：状态提示 */}
+      {genSummary && !genError && (
+        <div className="flex items-start gap-2 rounded-xl border border-cyan-glow bg-cyan-500 px-3 py-2.5 text-sm text-white">
+          <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
+          <span className="font-medium">{genSummary}</span>
+        </div>
+      )}
       {genError && (
         <div className="flex items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
           <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
@@ -539,25 +584,27 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   {/* 用户自定义维度 */}
                   {config.dims.map((dim) => (
                     <div key={dim.id} className="flex items-center gap-2 p-2 rounded-lg border border-edge hover:bg-brand-soft/30 transition-colors">
-                      <input
+                      <AutoWidthInput
                         value={dim.label}
                         onChange={(e) => updateDim(dim.id, { label: e.target.value })}
-                        placeholder="维度名（可点击改名，如 电池容量）"
-                        className="field py-1.5 text-xs flex-1 min-w-[140px] cursor-text hover:border-cyan-glow/60 focus:border-cyan-glow focus:ring-1 focus:ring-cyan-glow/40"
+                        placeholder="维度名"
+                        minWidth={90}
+                        className="field py-1.5 text-xs cursor-text hover:border-cyan-glow/60 focus:border-cyan-glow focus:ring-1 focus:ring-cyan-glow/40"
                       />
                       {isNumericType(dim.type) && (
-                        <input
+                        <AutoWidthInput
                           value={dim.unit ?? ''}
                           onChange={(e) => updateDim(dim.id, { unit: e.target.value })}
-                          placeholder="如 mAh"
-                          className="field py-1.5 text-xs w-16"
+                          placeholder="单位"
+                          minWidth={48}
+                          className="field py-1.5 text-xs"
                           title="单位（可选，如 mAh / g / mm）"
                         />
                       )}
                       <select
                         value={dim.type}
                         onChange={(e) => updateDim(dim.id, { type: e.target.value as ParamType })}
-                        className="field py-1.5 text-xs w-20"
+                        className="field py-1.5 text-xs min-w-[96px]"
                         title="维度类型"
                       >
                         {Object.entries(PARAM_TYPE_LABELS).map(([v, l]) => (
@@ -565,7 +612,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                         ))}
                       </select>
                       {dim.type === 'text' && (
-                        <input
+                        <AutoWidthInput
                           value={(dim.levels ?? []).join(',')}
                           onChange={(e) =>
                             updateDim(dim.id, {
@@ -576,7 +623,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                             })
                           }
                           placeholder="A,B,C"
-                          className="field py-1.5 text-xs w-24"
+                          minWidth={56}
+                          className="field py-1.5 text-xs"
                           title="评级序列，从优到劣，用逗号分隔"
                         />
                       )}
@@ -735,20 +783,20 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             <thead>
               <tr className="border-b border-edge text-left text-sm text-slate-500">
                 <th className="px-3 py-3 font-medium w-8">#</th>
-                <th className="px-3 py-3 font-medium w-28">{flavorLabel}</th>
-                <th className="px-3 py-3 font-medium min-w-[150px]">规格（重量×数量）</th>
-                <th className="px-3 py-3 font-medium w-24">总价 ¥</th>
-                <th className="px-3 py-3 font-medium w-24">单件含量</th>
-                <th className="px-3 py-3 font-medium w-16">单位</th>
-                <th className="px-3 py-3 font-medium w-20">数量</th>
+                <th className="px-3 py-3 font-medium">{flavorLabel}</th>
+                <th className="px-3 py-3 font-medium">规格（重量×数量）</th>
+                <th className="px-3 py-3 font-medium">总价 ¥</th>
+                <th className="px-3 py-3 font-medium">单件含量</th>
+                <th className="px-3 py-3 font-medium">单位</th>
+                <th className="px-3 py-3 font-medium">数量</th>
                 {config.dims.map((dim) => (
-                  <th key={dim.id} className="px-3 py-3 font-medium w-24">
+                  <th key={dim.id} className="px-3 py-3 font-medium">
                     {dim.label}
                     {dim.unit && <span className="text-sm text-slate-500 ml-1">({dim.unit})</span>}
                   </th>
                 ))}
-                <th className="px-3 py-3 font-medium w-24 text-right">总量</th>
-                <th className="px-3 py-3 font-medium w-32 text-right">每单位价</th>
+                <th className="px-3 py-3 font-medium text-right">总量</th>
+                <th className="px-3 py-3 font-medium text-right">每单位价</th>
                 <th className="px-3 py-3 font-medium w-10" />
               </tr>
             </thead>
@@ -938,7 +986,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         <select
           value={boolValue}
           onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
-          className="field py-1.5 text-xs w-full"
+          className="field py-1.5 text-xs min-w-[80px]"
         >
           <option value="no">否</option>
           <option value="yes">是</option>
@@ -951,7 +999,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         <select
           value={typeof raw === 'string' ? raw : ''}
           onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
-          className="field py-1.5 text-xs w-full"
+          className="field py-1.5 text-xs min-w-[88px]"
         >
           <option value="">—</option>
           {levels.map((lv) => (
@@ -962,14 +1010,15 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
     }
     // 数值型：higher-better / lower-better
     return (
-      <input
+      <AutoWidthInput
         type="number"
         value={typeof raw === 'number' ? raw : ''}
         onChange={(e) =>
           updateParam(s.id, dim.id, e.target.value === '' ? undefined : parseFloat(e.target.value))
         }
         placeholder={dim.unit ?? '0'}
-        className="field py-1.5 text-xs tabular w-full"
+        minWidth={56} extra={24}
+        className="field py-1.5 text-xs tabular"
       />
     )
   }
@@ -994,51 +1043,58 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
       </td>
       {/* 口味/型号/颜色（根据商品类型自适应） */}
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           value={flavor}
           onChange={(e) => setName(e.target.value, spec)}
           placeholder={flavorLabel}
+          minWidth={48}
           className="field py-1.5 text-xs"
         />
       </td>
       {/* 规格（重量×数量），与含量/单位/数量双向同步 */}
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           value={spec}
           onChange={(e) => handleSpec(e.target.value)}
           placeholder="如 16g×8袋"
+          minWidth={80}
           title="改这里会同步 含量/单位/数量"
           className="field py-1.5 text-xs font-medium"
         />
       </td>
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           type="number" min={0} step="0.01" value={s.price || ''}
           onChange={(e) => update(s.id, { price: parseFloat(e.target.value) || 0 })}
-          placeholder="4.94" className="field py-1.5 text-xs tabular"
+          placeholder="4.94" minWidth={64} extra={24}
+          className="field py-1.5 text-xs tabular"
         />
       </td>
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           type="number" min={0} value={s.quantity || ''}
           onChange={(e) => handleField('quantity', parseFloat(e.target.value) || 0)}
           placeholder="16"
+          minWidth={48} extra={24}
           title="改这里会同步规格描述"
           className="field py-1.5 text-xs tabular"
         />
       </td>
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           value={s.unit}
           onChange={(e) => handleField('unit', e.target.value)}
-          placeholder="g" className="field py-1.5 text-xs"
+          placeholder="g"
+          minWidth={36}
+          className="field py-1.5 text-xs"
         />
       </td>
       <td className="px-3 py-2">
-        <input
+        <AutoWidthInput
           type="number" min={1} value={s.packs || ''}
           onChange={(e) => handleField('packs', parseInt(e.target.value) || 1)}
           placeholder="8"
+          minWidth={48} extra={24}
           title="改这里会同步规格描述"
           className="field py-1.5 text-xs tabular"
         />

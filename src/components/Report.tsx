@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
 import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel } from '../lib/engine'
 import {
@@ -232,7 +232,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     </div>
                   </div>
                   <div>
-                    <div className="text-sm text-slate-400 mb-0.5">每包价格</div>
+                    <div className="text-sm text-slate-400 mb-0.5">{best.packs > 1 ? '每包' : '每件'}价格</div>
                     <div className="text-2xl font-bold tabular">{fmt.yuan(best.packPrice)}</div>
                   </div>
                   <div>
@@ -355,7 +355,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <th className="px-2 py-2 font-medium text-right">总价</th>
                       <th className="px-2 py-2 font-medium text-right">总量</th>
                       <th className="px-2 py-2 font-medium text-right">每{items[0]?.unit ?? ''}</th>
-                      <th className="px-2 py-2 font-medium text-right">每包</th>
+                      <th className="px-2 py-2 font-medium text-right">{items.some((i) => i.packs > 1) ? '每包' : '每件'}</th>
                     </tr>
                   </thead>
                   {/* key 随 groupBy 变化，切换分组维度时整体重挂载 */}
@@ -393,51 +393,49 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            按总量排序看单价变化 · 相邻档位逐级对比，每步升级多花多少、单价降多少 · 折线斜率越陡 = 边际效益变化越快
+            按总量排序 · 阶梯图每段标注升级成本（+¥X）与单价变化（↓Y%） · 绿色=划算，红色=坑
           </p>
 
-          {/* 折线图：横轴=总量，纵轴=单价。斜率反映边际效益 */}
+          {/* 阶梯图：横轴=总量，纵轴=单价。每段阶梯标注"多花¥X / 降Y%"，直接可视化每次升级值不值 */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
-            <div className="text-sm text-slate-500 mb-2 flex items-center gap-2">
-              <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价随总量变化曲线
-              <span className="text-slate-600">· 下行=大包装更划算，陡降=边际效益高</span>
-              <span className="text-slate-600">· 仅标注边际效益（单价降幅）前三的规格</span>
+            <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
+              <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价阶梯 · 每段标注升级成本与单价变化
+              <span className="text-slate-600">· 绿色=单价降（划算），红色=单价涨（坑）</span>
             </div>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
                   const merged = mergeVariantSkus(items)
-                  const chartData = merged.map((it) => {
+                  // 智能选择横轴：总量有区分度（max>min）时用总量，否则用规格索引
+                  // 例：瑜伽垫/耳机都是1件，总量全是1，用总量做横轴会挤成一个点；改用索引让阶梯沿规格顺序展开
+                  const totals = merged.map((m) => m.totalQuantity)
+                  const totalMin = Math.min(...totals)
+                  const totalMax = Math.max(...totals)
+                  const useTotalAsX = totalMax > totalMin
+                  const chartData = merged.map((it, i) => {
                     const { spec } = parseFlavor(it.name)
                     const label = spec || it.name
                     return {
                       name: label.length > 10 ? label.slice(0, 10) + '…' : label,
-                      总量: it.totalQuantity,
+                      [useTotalAsX ? '总量' : '序号']: useTotalAsX ? it.totalQuantity : i,
                       单价: round6(it.unitPrice),
                     }
                   })
-                  // 边际效益前三高（单价降幅 unitPriceDropPct 最大）的规格：仅这些在折线图上显示名字。
-                  // margins[j] 是 merged[j]→merged[j+1] 的过渡，其目标规格索引为 j+1。
-                  const topNameIdx = new Set(
-                    margins
-                      .map((m, j) => ({ idx: j + 1, drop: m.unitPriceDropPct ?? 0 }))
-                      .filter((d) => d.idx < chartData.length)
-                      .sort((a, b) => b.drop - a.drop)
-                      .slice(0, 3)
-                      .map((d) => d.idx),
-                  )
                   return (
                     <LineChart
                       data={chartData}
-                      margin={{ top: 28, right: 32, bottom: 28, left: 8 }}
+                      margin={{ top: 36, right: 32, bottom: 28, left: 8 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
                       <XAxis
-                        dataKey="总量"
+                        dataKey={useTotalAsX ? '总量' : '序号'}
                         type="number"
+                        domain={useTotalAsX ? ['auto', 'auto'] : [0, merged.length - 1]}
                         tick={{ fill: '#64748b', fontSize: 11 }}
-                        tickFormatter={(v) => fmt.num(v)}
-                        label={{ value: '总量', fill: '#64748b', fontSize: 11, position: 'insideBottom', offset: -2 }}
+                        tickFormatter={(v) =>
+                          useTotalAsX ? fmt.num(Number(v)) : (merged[Number(v)] && parseFlavor(merged[Number(v)].name).spec) || ''
+                        }
+                        label={{ value: useTotalAsX ? '总量' : '规格', fill: '#64748b', fontSize: 11, position: 'insideBottom', offset: -2 }}
                       />
                       <YAxis
                         tick={{ fill: '#64748b', fontSize: 11 }}
@@ -448,11 +446,13 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         contentStyle={tooltipStyle}
                         labelStyle={tooltipLabelStyle}
                         itemStyle={tooltipItemStyle}
-                        labelFormatter={(v) => `总量 ${fmt.num(Number(v))}`}
+                        labelFormatter={(v) =>
+                          useTotalAsX ? `总量 ${fmt.num(Number(v))}` : (merged[Number(v)] && parseFlavor(merged[Number(v)].name).spec) || ''
+                        }
                         formatter={(v: number) => [`¥${v}`, '单价']}
                       />
                       <Line
-                        type="monotone"
+                        type="stepAfter"
                         dataKey="单价"
                         stroke="#06b6d4"
                         strokeWidth={2.5}
@@ -461,21 +461,28 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         label={(props: { x?: number; y?: number; index?: number }) => {
                           const { x, y, index } = props
                           if (x == null || y == null || index == null) return <g />
-                          // 仅显示边际效益前三高的规格名字，其余点位只画点不标名
-                          if (!topNameIdx.has(index)) return <g />
+                          // 每段阶梯的中点（当前点与前一点之间）标注升级成本与单价变化
+                          // margins[index-1] 对应 merged[index-1] → merged[index] 这一段升级
+                          const m = margins[index - 1]
+                          if (!m) return <g />
+                          // 颜色：单价降=绿，涨=红，持平=灰
+                          const drop = m.unitPriceDropPct ?? 0
+                          const color = drop > 0.5 ? '#34d399' : drop < -0.5 ? '#f87171' : '#94a3b8'
+                          const dropStr = `${drop > 0 ? '↓' : '↑'}${Math.abs(drop).toFixed(1)}%`
+                          const costStr = `+¥${m.extraCost.toFixed(0)}`
                           return (
                             <text
                               x={x}
-                              y={y - 14}
-                              fill="#38e0f0"
+                              y={y - 12}
+                              fill={color}
                               stroke="#0b1220"
                               strokeWidth={3}
                               paintOrder="stroke"
-                              fontSize={13}
+                              fontSize={11}
                               fontWeight={700}
                               textAnchor="middle"
                             >
-                              {chartData[index]?.name}
+                              {costStr} {dropStr}
                             </text>
                           )
                         }}
@@ -626,7 +633,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
             <span className="text-cyan-glow">{fmt.priceUnit(cluster.repUnitPrice)}</span>
             <span className="text-sm text-slate-500 font-normal"> /{cluster.unit}</span>
           </div>
-          <div className="text-sm text-slate-500">每包 {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
+          <div className="text-sm text-slate-500">{cluster.packs > 1 ? '每包' : '每件'} {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
         </div>
       </div>
 

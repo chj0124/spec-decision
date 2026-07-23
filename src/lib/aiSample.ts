@@ -14,6 +14,8 @@ export interface GeneratedExample {
   source: 'ai' | 'fallback'
   /** 回退时的友好说明（含真实失败原因），用于 UI 提示 */
   note?: string
+  /** 生成结果的简要介绍（商品品类、SKU 数、维度构成），让用户一眼知道生成了什么 */
+  summary: string
 }
 
 const clamp = (n: number, lo: number, hi: number, dflt: number) => {
@@ -345,6 +347,19 @@ async function generateViaAi(): Promise<{ skus: Sku[]; config: DecisionConfig }>
 }
 
 /**
+ * 根据 config + skus 本地拼装一句简介，让用户一眼知道生成了什么。
+ * 不依赖 AI 返回 summary 字段（AI 不一定遵守），用结构化数据拼装更可靠。
+ */
+function buildSummary(skus: Sku[], config: DecisionConfig): string {
+  const category = config.category || '商品'
+  const dimLabels = config.dims.map((d) => d.label).filter(Boolean)
+  const dimPart = dimLabels.length > 0
+    ? `，${dimLabels.length} 个参数维度（${dimLabels.join('、')}）`
+    : ''
+  return `已加载「${category}」示例：${skus.length} 个 SKU${dimPart}`
+}
+
+/**
  * 生成一份逼真的多 SKU 决策示例。
  * 优先用 AI（若已配置）；否则回退到内置真实商品模板。
  * 任何 AI 异常都会被吞掉并回退，保证按钮永远可用。
@@ -353,20 +368,24 @@ export async function generateExample(): Promise<GeneratedExample> {
   if (isAiReady()) {
     try {
       const data = await generateViaAi()
-      return { ...data, source: 'ai' }
+      return { ...data, source: 'ai', summary: buildSummary(data.skus, data.config) }
     } catch (e: any) {
       const msg = e?.message ?? String(e)
       console.warn('[aiSample] AI 生成失败，回退内置模板：', e)
+      const fb = pickFallback()
       return {
-        ...pickFallback(),
+        ...fb,
         source: 'fallback',
         note: `AI 实时生成失败（${msg}），已用内置真实商品示例替代。`,
+        summary: buildSummary(fb.skus, fb.config),
       }
     }
   }
+  const fb = pickFallback()
   return {
-    ...pickFallback(),
+    ...fb,
     source: 'fallback',
     note: '未配置 AI，已加载内置真实商品示例；在右上角「AI 设置」填入 API 后，可生成每次不同的真实示例。',
+    summary: buildSummary(fb.skus, fb.config),
   }
 }

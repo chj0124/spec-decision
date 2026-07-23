@@ -573,13 +573,16 @@ export const fmt = {
     return `¥${n.toPrecision(2)}`
   },
   /**
-   * 单价友好显示：极小单价（< 0.1 元/单位）改用"分"表达，避免一串小数零。
-   * 例：0.0257 → "2.57分"；0.5 → "¥0.5000"；1.2 → "¥1.2000"
+   * 单价友好显示：根据数值大小自适应精度，避免一串小数零或多余小数位。
+   * - < 0.1 元：改用"分"表达，如 0.0257 → "2.57分"
+   * - 0.1 ~ 1 元：保留4位小数，如 0.5234 → "¥0.5234"
+   * - ≥ 1 元：保留2位小数，如 89.9 → "¥89.90"
    */
   priceUnit: (n: number) => {
     if (n <= 0) return '0分'
     if (n < 0.1) return `${(n * 100).toFixed(2)}分`
-    return `¥${n.toFixed(4)}`
+    if (n < 1) return `¥${n.toFixed(4)}`
+    return `¥${n.toFixed(2)}`
   },
   num: (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2)),
   pct: (n: number) => `${n.toFixed(1)}%`,
