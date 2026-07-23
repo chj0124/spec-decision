@@ -192,23 +192,25 @@ export default function RecognizeReview({
     >
       {/* 头部 */}
       <div className="flex flex-col sm:flex-row gap-4 sm:items-start">
-        {/* 缩略图：单图直接显示，多图横排带序号角标 */}
-        <div className={`shrink-0 ${isBatch ? 'flex gap-1.5 max-w-[280px] overflow-x-auto' : 'h-20 w-20'}`}>
-          {images.map((img, i) => (
-            <div
-              key={i}
-              className={`relative rounded-xl overflow-hidden border border-edge shrink-0 ${isBatch ? 'h-16 w-16' : 'h-full w-full'}`}
-              title={`截图 ${i + 1}`}
-            >
-              <img src={img} alt={`识别截图 ${i + 1}`} className="h-full w-full object-cover" />
-              {isBatch && (
-                <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
-                  {i + 1}
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
+        {/* 缩略图：单图直接显示，多图横排带序号角标；粘贴文本表格时 images 为空，不渲染此区域 */}
+        {images.length > 0 && (
+          <div className={`shrink-0 ${isBatch ? 'flex gap-1.5 max-w-[280px] overflow-x-auto' : 'h-20 w-20'}`}>
+            {images.map((img, i) => (
+              <div
+                key={i}
+                className={`relative rounded-xl overflow-hidden border border-edge shrink-0 ${isBatch ? 'h-16 w-16' : 'h-full w-full'}`}
+                title={`截图 ${i + 1}`}
+              >
+                <img src={img} alt={`识别截图 ${i + 1}`} className="h-full w-full object-cover" />
+                {isBatch && (
+                  <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
+                    {i + 1}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           <h3 className="text-lg font-bold tracking-tight flex items-center gap-2 flex-wrap">
             {source === 'error' ? '识别失败' : isBatch ? '批量识别结果' : '确认识别结果'}
@@ -237,14 +239,20 @@ export default function RecognizeReview({
             <div className="mt-2 rounded-xl border border-red-400/40 bg-red-500/10 p-3 flex gap-2">
               <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-red-600 mb-1">视觉模型调用失败</p>
-                <p className="text-sm text-red-500 leading-relaxed break-all">{note}</p>
-                <p className="text-sm text-slate-500 mt-2">
-                  请到「AI 设置」检查配置：
-                  <br />1. Base URL / API Key 是否正确
-                  <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-cyan-glow">qwen-vl-plus</code> / <code className="font-mono text-cyan-glow">glm-4v-flash</code> / <code className="font-mono text-cyan-glow">gpt-4o-mini</code>
-                  <br />3. DeepSeek 不支持视觉，需换其他服务商
+                {/* 通用标题：粘贴解析失败 vs 视觉模型调用失败 */}
+                <p className="text-xs font-semibold text-red-600 mb-1">
+                  {note && /价格|名称|表格/.test(note) ? '粘贴内容解析失败' : '视觉模型调用失败'}
                 </p>
+                <p className="text-sm text-red-500 leading-relaxed break-all">{note}</p>
+                {/* AI 配置提示仅在视觉模型失败时显示，粘贴解析失败不需要 */}
+                {(!note || !/价格|名称|表格/.test(note)) && (
+                  <p className="text-sm text-slate-500 mt-2">
+                    请到「AI 设置」检查配置：
+                    <br />1. Base URL / API Key 是否正确
+                    <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-cyan-glow">qwen-vl-plus</code> / <code className="font-mono text-cyan-glow">glm-4v-flash</code> / <code className="font-mono text-cyan-glow">gpt-4o-mini</code>
+                    <br />3. DeepSeek 不支持视觉，需换其他服务商
+                  </p>
+                )}
               </div>
             </div>
           ) : (

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
 
 interface Props {
@@ -393,49 +393,56 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            按总量排序 · 阶梯图每段标注升级成本（+¥X）与单价变化（↓Y%） · 绿色=划算，红色=坑
+            柱状图按单价从高到低排列 · 红色=最贵，绿色=最便宜 · 柱顶显示单价
           </p>
 
-          {/* 阶梯图：横轴=总量，纵轴=单价。每段阶梯标注"多花¥X / 降Y%"，直接可视化每次升级值不值 */}
+          {/* 单价柱状图：按单价从高到低排列，颜色编码（最贵红、最便宜绿），柱顶显示规格名 */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              <span className="inline-block w-3 h-0.5 bg-cyan-glow" /> 单价阶梯 · 每段标注升级成本与单价变化
-              <span className="text-slate-600">· 绿色=单价降（划算），红色=单价涨（坑）</span>
+              <span className="inline-block w-3 h-3 rounded-sm bg-cyan-glow" /> 单价对比 · 从高到低排列
+              <span className="text-slate-600">· 红色=最贵，绿色=最便宜，颜色深浅渐变</span>
             </div>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
                 {(() => {
                   const merged = mergeVariantSkus(items)
-                  // 智能选择横轴：总量有区分度（max>min）时用总量，否则用规格索引
-                  // 例：瑜伽垫/耳机都是1件，总量全是1，用总量做横轴会挤成一个点；改用索引让阶梯沿规格顺序展开
-                  const totals = merged.map((m) => m.totalQuantity)
-                  const totalMin = Math.min(...totals)
-                  const totalMax = Math.max(...totals)
-                  const useTotalAsX = totalMax > totalMin
-                  const chartData = merged.map((it, i) => {
+                  // 按单价降序排列（从高到低）
+                  const sorted = [...merged].sort((a, b) => b.unitPrice - a.unitPrice)
+                  const prices = sorted.map((m) => m.unitPrice)
+                  const maxPrice = Math.max(...prices)
+                  const minPrice = Math.min(...prices)
+                  const range = maxPrice - minPrice || 1
+                  const chartData = sorted.map((it) => {
                     const { spec } = parseFlavor(it.name)
                     const label = spec || it.name
                     return {
-                      name: label.length > 10 ? label.slice(0, 10) + '…' : label,
-                      [useTotalAsX ? '总量' : '序号']: useTotalAsX ? it.totalQuantity : i,
+                      name: label.length > 8 ? label.slice(0, 8) + '…' : label,
+                      fullName: label,
                       单价: round6(it.unitPrice),
+                      unit: it.unit,
                     }
                   })
+                  // 单价越高颜色越红，越低越绿；用 HSL 插值
+                  const colorFor = (price: number) => {
+                    // 0=最便宜(绿) → 1=最贵(红)
+                    const t = (price - minPrice) / range
+                    // hue: 140(绿) → 0(红)
+                    const hue = Math.round(140 * (1 - t))
+                    return `hsl(${hue}, 70%, 55%)`
+                  }
                   return (
-                    <LineChart
+                    <BarChart
                       data={chartData}
-                      margin={{ top: 36, right: 32, bottom: 28, left: 8 }}
+                      margin={{ top: 36, right: 16, bottom: 8, left: 8 }}
                     >
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" />
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" vertical={false} />
                       <XAxis
-                        dataKey={useTotalAsX ? '总量' : '序号'}
-                        type="number"
-                        domain={useTotalAsX ? ['auto', 'auto'] : [0, merged.length - 1]}
+                        dataKey="name"
                         tick={{ fill: '#64748b', fontSize: 11 }}
-                        tickFormatter={(v) =>
-                          useTotalAsX ? fmt.num(Number(v)) : (merged[Number(v)] && parseFlavor(merged[Number(v)].name).spec) || ''
-                        }
-                        label={{ value: useTotalAsX ? '总量' : '规格', fill: '#64748b', fontSize: 11, position: 'insideBottom', offset: -2 }}
+                        interval={0}
+                        angle={-30}
+                        textAnchor="end"
+                        height={64}
                       />
                       <YAxis
                         tick={{ fill: '#64748b', fontSize: 11 }}
@@ -443,38 +450,24 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         width={56}
                       />
                       <Tooltip
+                        cursor={{ fill: 'rgba(6, 182, 212, 0.08)' }}
                         contentStyle={tooltipStyle}
                         labelStyle={tooltipLabelStyle}
                         itemStyle={tooltipItemStyle}
-                        labelFormatter={(v) =>
-                          useTotalAsX ? `总量 ${fmt.num(Number(v))}` : (merged[Number(v)] && parseFlavor(merged[Number(v)].name).spec) || ''
-                        }
                         formatter={(v: number) => [`¥${v}`, '单价']}
                       />
-                      <Line
-                        type="stepAfter"
+                      <Bar
                         dataKey="单价"
-                        stroke="#06b6d4"
-                        strokeWidth={2.5}
-                        dot={{ fill: '#06b6d4', r: 5 }}
-                        activeDot={{ r: 7 }}
-                        label={(props: { x?: number; y?: number; index?: number }) => {
-                          const { x, y, index } = props
-                          if (x == null || y == null || index == null) return <g />
-                          // 每段阶梯的中点（当前点与前一点之间）标注升级成本与单价变化
-                          // margins[index-1] 对应 merged[index-1] → merged[index] 这一段升级
-                          const m = margins[index - 1]
-                          if (!m) return <g />
-                          // 颜色：单价降=绿，涨=红，持平=灰
-                          const drop = m.unitPriceDropPct ?? 0
-                          const color = drop > 0.5 ? '#34d399' : drop < -0.5 ? '#f87171' : '#94a3b8'
-                          const dropStr = `${drop > 0 ? '↓' : '↑'}${Math.abs(drop).toFixed(1)}%`
-                          const costStr = `+¥${m.extraCost.toFixed(0)}`
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={64}
+                        label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
+                          const { x, y, width, value } = props
+                          if (x == null || y == null || width == null || value == null) return <g />
                           return (
                             <text
-                              x={x}
-                              y={y - 12}
-                              fill={color}
+                              x={x + width / 2}
+                              y={y - 8}
+                              fill="#e2e8f0"
                               stroke="#0b1220"
                               strokeWidth={3}
                               paintOrder="stroke"
@@ -482,12 +475,16 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                               fontWeight={700}
                               textAnchor="middle"
                             >
-                              {costStr} {dropStr}
+                              {fmt.priceUnit(value)}
                             </text>
                           )
                         }}
-                      />
-                    </LineChart>
+                      >
+                        {chartData.map((entry, index) => (
+                          <Cell key={index} fill={colorFor(entry.单价)} />
+                        ))}
+                      </Bar>
+                    </BarChart>
                   )
                 })()}
               </ResponsiveContainer>

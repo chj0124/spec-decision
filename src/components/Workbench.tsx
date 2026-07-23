@@ -3,6 +3,7 @@ import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../li
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImage, recognizeImages, toSku } from '../lib/recognize'
+import { parseClipboardTable } from '../lib/parseTable'
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
@@ -317,7 +318,35 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       pickImage(e.dataTransfer.files)
     }
     const onPaste = (e: ClipboardEvent) => {
-      if (e.clipboardData?.files.length) pickImage(e.clipboardData.files)
+      // 优先处理图片（截图粘贴）
+      if (e.clipboardData?.files.length) {
+        pickImage(e.clipboardData.files)
+        return
+      }
+      // 没有图片时尝试解析文本表格（Excel/电商页面/Markdown 复制）
+      const text = e.clipboardData?.getData('text/plain') ?? ''
+      const html = e.clipboardData?.getData('text/html') ?? ''
+      if (!text.trim()) return
+      const parsed = parseClipboardTable(text, html)
+      if (!parsed) return
+      if (parsed.items.length === 0) {
+        // 解析失败（没识别到价格/名称列），给出提示
+        setReview({
+          items: [],
+          source: 'error',
+          note: parsed.note ?? '未能从粘贴内容解析出表格',
+          images: [],
+        })
+        return
+      }
+      // 解析成功：复用识别确认弹窗，source='api' 避免显示"演示识别"
+      setReview({
+        items: parsed.items,
+        dims: parsed.dims,
+        source: 'api',
+        note: parsed.note,
+        images: [],
+      })
     }
 
     window.addEventListener('dragenter', onDragEnter)
@@ -393,12 +422,13 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <p className="mt-2 text-sm text-slate-400 max-w-xl leading-relaxed">
             把每个购买选项的名字、价格、单件含量与件数填进来，系统自动换算每单位价格，并结合附加参数给出推荐。
           </p>
-          <p className="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5">
+          <p className="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
             <UploadCloud className="h-3.5 w-3.5 text-cyan-glow/70" />
             也可以直接把商品截图<b className="text-slate-600 font-medium">拖到页面任意位置</b>，或截图后按
             <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-sm font-mono">Ctrl+V</kbd>
             粘贴识别。
             <span className="text-cyan-glow/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
+            <span className="text-emerald-400/80">也支持直接粘贴 Excel/电商页面表格（Ctrl+V），自动识别列。</span>
           </p>
         </div>
 
