@@ -17,7 +17,9 @@
 | 避坑提示 | 自动识别「加价又加价率」、过度囤货、智商税规格 |
 | 决策简化 | 把「3口味×4款式」这类仅干扰维度不同的规格按定价因子聚合，12 选 1 降维成 4 选 1，簇内再挑口味 |
 | AI 截图识别 | 上传 / 拖拽 / 粘贴截图识别规格与价格，识别后进入可编辑确认列表，支持手动修正（可接真实多模态模型） |
-| 图表对比 | 单价柱状图 + 多维能力雷达图（随简化/全量视图联动） |
+| 表格粘贴导入 | 直接 Ctrl+V 粘贴 Excel / 电商页面 / Markdown 表格，自动识别价格、规格、参数列 |
+| 图表对比 | 单价与边际成本双轴图 + 多维能力雷达图（随简化/全量视图联动，识别出参数维度后展示） |
+| 导出报告 | 一键打印 / 另存 PDF（自动隐藏页头页脚），或复制纯文本决策摘要到剪贴板 |
 
 ## 特性
 
@@ -52,12 +54,24 @@ npm run preview    # 预览构建产物
 
 ```
 src/
-├── App.tsx                 # 应用入口 / 路由 / 主题
+├── App.tsx                 # 应用入口 / 页面切换 / 主题
 ├── components/
-│   ├── Workbench.tsx       # 工作台页（规格录入）
-│   └── Report.tsx          # 报告页（排名/推荐/边际/避坑/图表）
+│   ├── Workbench.tsx       # 工作台页（规格录入 / 维度权重 / 识别入口 / 分组折叠）
+│   ├── RecognizeReview.tsx # 识别确认页（可编辑 / 双向同步 / 低置信度高亮）
+│   ├── Report.tsx          # 报告页（排名/推荐/边际/避坑/图表/导出）
+│   └── AiSettings.tsx      # AI 配置面板（OpenAI 兼容 / 模型列表 / 测试连接）
 └── lib/
-    ├── types.ts            # 领域模型
-    ├── engine.ts           # 计算引擎（换算/打分/边际/避坑）
-    └── store.ts            # localStorage 持久化 + 示例数据
+    ├── types.ts            # 领域模型（Sku / ComputedSku / SkuCluster / DecisionConfig）
+    ├── engine.ts           # 计算引擎（换算/打分/边际/避坑/分簇/双向同步）
+    ├── recognize.ts        # 截图识别逻辑（视觉模型 + 演示兜底 + Prompt）
+    ├── parseTable.ts       # 粘贴表格解析（Excel / HTML / Markdown → SKU）
+    ├── ai.ts               # AI 客户端（OpenAI 兼容，同源代理转发）
+    ├── aiSample.ts         # AI 生成示例（含内置真实商品模板兜底）
+    ├── useUnitNormalize.ts # 生僻单位 AI 归一化 hook
+    └── store.ts            # localStorage 持久化 + v1→v2 迁移
+api/
+├── recognize.ts            # Vercel Edge 视觉识别端点（可选）
+├── ai-chat.js              # Vercel Serverless AI 对话代理
+└── ai-models.js            # Vercel Serverless 模型列表代理
+_worker.js                  # Cloudflare 部署的 Worker（API 代理 + 静态资源回退）
 ```
