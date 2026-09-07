@@ -98,3 +98,36 @@ html.dark ::-webkit-scrollbar-thumb { background: #166534; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ===== 打印样式：报告页打印 / 另存 PDF ===== */
+@media print {
+  /* 页头导航、页脚、交互按钮不进纸 */
+  body > div > header,
+  body > div > footer,
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff !important;
+    background-image: none !important;
+  }
+  html.dark body {
+    background: #fff !important;
+    background-image: none !important;
+    color: #0f172a !important;
+  }
+  /* 网格纹理与玻璃效果打印无意义，压平为白纸 */
+  .grid-texture {
+    background-image: none !important;
+  }
+  .glass {
+    background: #fff !important;
+    box-shadow: none !important;
+    border-color: #cbd5e1 !important;
+    break-inside: avoid;
+  }
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+}

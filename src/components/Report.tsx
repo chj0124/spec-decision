@@ -4,11 +4,13 @@ import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel } from '../lib/eng
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
+  Printer, Copy, Check, Radar as RadarIcon,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ComposedChart, Line,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
 } from 'recharts'
 
 interface Props {
@@ -46,6 +48,55 @@ const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; r
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6
 
+/** 雷达图系列调色板（与单价图青/橙/绿主色系一致，最多 5 条） */
+const RADAR_COLORS = ['#06b6d4', '#f59e0b', '#22c55e', '#a855f7', '#ef4444']
+
+/** 雷达图/图例用的系列短名：优先「口味·规格」，超长截断 */
+function shortLabel(it: ComputedSku): string {
+  const { spec, flavor } = parseFlavor(it.name)
+  if (spec && spec.length <= 16) return flavor ? `${flavor}·${spec}` : spec
+  return it.name.length > 16 ? it.name.slice(0, 16) + '…' : it.name
+}
+
+/** 生成纯文本决策摘要（复制到剪贴板 / 导出用） */
+function buildSummaryText(result: DecisionResult, config: DecisionConfig): string {
+  const { best, items, reasons, warnings, margins } = result
+  if (!best) return ''
+  const lines: string[] = []
+  lines.push('【规格决策摘要】')
+  if (config.category) lines.push(`商品类型：${config.category}`)
+  lines.push(`生成时间：${new Date().toLocaleString('zh-CN')}`)
+  lines.push('')
+  lines.push(`★ 最划算：${best.name}`)
+  lines.push(
+    `  总价 ${fmt.yuan(best.price)} · 总量 ${fmt.num(best.totalQuantity)}${best.unit}` +
+    ` · 每${best.unit} ${fmt.priceUnit(best.unitPrice)} · 综合得分 ${best.score.toFixed(1)}`,
+  )
+  if (reasons.length > 0) {
+    lines.push('')
+    lines.push('推荐理由：')
+    reasons.forEach((r, i) => lines.push(`  ${i + 1}. ${r}`))
+  }
+  lines.push('')
+  lines.push(`完整排名（前 5 / 共 ${items.length} 项）：`)
+  items.slice(0, 5).forEach((it) => {
+    lines.push(`  ${it.rank}. ${it.name} — 每${it.unit} ${fmt.priceUnit(it.unitPrice)}（总价 ${fmt.yuan(it.price)}）`)
+  })
+  if (margins.length > 0) {
+    lines.push('')
+    lines.push('边际效益：')
+    margins.forEach((m) => lines.push(`  · ${m.verdict}`))
+  }
+  if (warnings.length > 0) {
+    lines.push('')
+    lines.push('避坑提示：')
+    warnings.forEach((w) => lines.push(`  · ${w}`))
+  }
+  lines.push('')
+  lines.push('— 由「规格决策台」生成')
+  return lines.join('\n')
+}
+
 /** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致 */
 const FLAVOR_COLORS = [
   'bg-sky-900/20',
@@ -81,6 +132,29 @@ function groupComputedSkus(
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
+
+  // 复制决策摘要到剪贴板（2 秒后恢复按钮文案）
+  const [copied, setCopied] = useState(false)
+  const copySummary = async () => {
+    const text = buildSummaryText(result, config)
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      // 兼容非安全上下文（http）与旧浏览器：隐藏 textarea + execCommand
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch { /* 尽力而为 */ }
+      document.body.removeChild(ta)
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   // 有干扰维度（同定价多口味）时，默认用簇化简视图
   const [view, setView] = useState<'cluster' | 'full'>(hasVariants ? 'cluster' : 'full')
   // 用户手动切换过则尊重其选择；否则跟随数据（识别/导入后 hasVariants 可能变化）
@@ -131,15 +205,27 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   })()
 
   if (items.length === 0) {
+    // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
+    const budgetEmpty = config.preference === 'budget' && result.budgetExcluded > 0
     return (
       <div className="glass rounded-2xl p-12 text-center space-y-4">
         <Scale className="h-12 w-12 mx-auto text-slate-600" />
-        <p className="text-slate-400">还没有可对比的规格，先回工作台填写。</p>
+        {budgetEmpty ? (
+          <>
+            <p className="text-slate-400">
+              预算 <span className="text-cyan-glow font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
+              （{result.budgetExcluded} 个规格全部超出预算）。
+            </p>
+            <p className="text-sm text-slate-500 -mt-2">可提高预算，或切换为「性价比优先 / 综合得分优先」再看。</p>
+          </>
+        ) : (
+          <p className="text-slate-400">还没有可对比的规格，先回工作台填写。</p>
+        )}
         <button
           onClick={onBack}
           className="px-5 py-2.5 rounded-xl bg-cyan-glow/15 text-cyan-glow text-sm font-semibold hover:bg-cyan-glow/25 transition-all inline-flex items-center gap-2"
         >
-          <ArrowLeft className="h-4 w-4" /> 返回工作台
+          <ArrowLeft className="h-4 w-4" /> {budgetEmpty ? '返回调整' : '返回工作台'}
         </button>
       </div>
     )
@@ -148,16 +234,61 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 决策单元：簇视图按簇，全量视图按单个规格
   const decisionUnits = view === 'cluster' ? clusters : null
 
+  // 多维能力雷达数据：簇视图取各簇代表成员（最省钱），全量视图取排名前 5。
+  // 需 ≥2 个参数维度 + ≥2 个对比对象才有雷达意义；dimScores 由 scoreItems 填充（含价格维度 'price'）。
+  const radar = (() => {
+    if (config.dims.length < 2) return null
+    const pool = view === 'cluster' && decisionUnits
+      ? decisionUnits.map((c) => c.members[0]).filter((m): m is ComputedSku => Boolean(m))
+      : items
+    const top = pool.slice(0, 5)
+    if (top.length < 2) return null
+    const axes = [
+      { key: 'price', label: '价格' },
+      ...config.dims.map((d) => ({ key: d.id, label: d.unit ? `${d.label}(${d.unit})` : d.label })),
+    ]
+    const keys = top.map((it) => `${it.rank}. ${shortLabel(it)}`)
+    const data = axes.map((ax) => {
+      const row: Record<string, string | number> = { dim: ax.label }
+      top.forEach((it, i) => {
+        const v = it.dimScores?.[ax.key]
+        if (typeof v === 'number') row[keys[i]] = Math.round(v * 10) / 10
+      })
+      return row
+    })
+    return { data, keys }
+  })()
+
   return (
     <div className="space-y-8">
-      {/* 返回 + 决策偏好 */}
+      {/* 返回 + 导出 + 决策偏好 */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <button
-          onClick={onBack}
-          className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5"
-        >
-          <ArrowLeft className="h-4 w-4" /> 返回编辑
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={onBack}
+            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5"
+          >
+            <ArrowLeft className="h-4 w-4" /> 返回编辑
+          </button>
+          <span className="text-edge">|</span>
+          {/* 导出：打印为 PDF（浏览器打印对话框，配合打印样式）+ 复制纯文本摘要 */}
+          <button
+            onClick={() => window.print()}
+            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5 no-print"
+            title="调起浏览器打印对话框，可另存为 PDF（已隐藏页头页脚与按钮，只打印报告内容）"
+          >
+            <Printer className="h-4 w-4" /> 打印 / PDF
+          </button>
+          <button
+            onClick={copySummary}
+            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5 no-print"
+            title="复制纯文本决策摘要（推荐规格、排名、边际效益与避坑提示）到剪贴板"
+          >
+            {copied
+              ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">已复制</span></>
+              : <><Copy className="h-4 w-4" /> 复制摘要</>}
+          </button>
+        </div>
 
         {/* 决策偏好切换 */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -624,6 +755,45 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </section>
       )}
       </div>
+
+      {/* 多维能力雷达：簇视图取簇代表，全量视图取前 5 名 */}
+      {radar && (
+        <section className="glass rounded-2xl p-6">
+          <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
+            <RadarIcon className="h-5 w-5 text-cyan-glow" /> 多维能力对比
+          </h3>
+          <p className="text-xs text-slate-500 mb-5">
+            {view === 'cluster' ? '每个簇取最省钱成员为代表 · ' : '展示排名前 5 的规格 · '}
+            各维度按 0-100 归一化（价格维度单价越低分越高），覆盖面积越大越全面占优
+          </p>
+          <div className="h-96">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={radar.data} cx="50%" cy="50%" outerRadius="70%">
+                <PolarGrid stroke="#1c2740" />
+                <PolarAngleAxis dataKey="dim" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                {radar.keys.map((k, i) => (
+                  <Radar
+                    key={k}
+                    name={k}
+                    dataKey={k}
+                    stroke={RADAR_COLORS[i % RADAR_COLORS.length]}
+                    fill={RADAR_COLORS[i % RADAR_COLORS.length]}
+                    fillOpacity={0.12}
+                    strokeWidth={2}
+                  />
+                ))}
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  labelStyle={tooltipLabelStyle}
+                  itemStyle={tooltipItemStyle}
+                />
+                <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      )}
     </div>
   )
 }
