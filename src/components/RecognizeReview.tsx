@@ -90,7 +90,7 @@ export default function RecognizeReview({
     update(i, { name })
   }
 
-  /** 改「规格描述」：同步解析出 含量/单位/数量 */
+  /** 改「规格描述」：同步解析出 含量/单位/数量/件数量词 */
   const setSpec = (i: number, spec: string) => {
     const r = rows[i]
     const { flavor } = parseFlavor(r.name)
@@ -98,7 +98,10 @@ export default function RecognizeReview({
     const patch: Partial<RecognizedSku> = {}
     if (parts.quantity !== undefined) patch.quantity = parts.quantity
     if (parts.unit) patch.unit = parts.unit
-    if (parts.packs !== undefined) patch.packs = parts.packs
+    if (parts.packs !== undefined) {
+      patch.packs = parts.packs
+      patch.packUnit = parts.packUnit ?? ''
+    }
     setRows(rows.map((row, idx) => {
       if (idx !== i) return row
       const name = flavor ? `${flavor} ${spec.trim()}`.trim() : spec.trim()
@@ -112,7 +115,7 @@ export default function RecognizeReview({
       if (idx !== i) return row
       const next = { ...row, [field]: value, confidence: 1 }
       const { flavor } = parseFlavor(row.name)
-      const spec = buildSpec(next.quantity, next.unit, next.packs)
+      const spec = buildSpec(next.quantity, next.unit, next.packs, next.packUnit)
       const name = flavor ? `${flavor} ${spec}`.trim() : spec
       return { ...next, name }
     }))

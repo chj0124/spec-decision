@@ -211,6 +211,7 @@ function buildSkuFromName(name: string): Partial<RecognizedSku> {
     quantity: parts.quantity ?? 1,
     unit: parts.unit || '个',
     packs: parts.packs ?? 1,
+    ...(parts.packUnit ? { packUnit: parts.packUnit } : {}),
   }
 }
 
@@ -250,6 +251,7 @@ export function parseClipboardTable(text: string, html?: string): ParseTableResu
     let quantity: number | undefined
     let unit: string | undefined
     let packs: number | undefined
+    let packUnit: string | undefined
     const params: Record<string, string | number> = {}
 
     for (let i = 0; i < colInfos.length; i++) {

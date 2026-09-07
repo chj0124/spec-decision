@@ -17,6 +17,8 @@ export interface RecognizedSku {
   quantity: number
   unit: string
   packs: number
+  /** 件数量词（如 袋/瓶/罐），从规格描述提取；仅影响展示 */
+  packUnit?: string
   /** 0-1，模型对该条识别的把握；低于阈值时 UI 高亮提示人工核对 */
   confidence: number
   /** 多维参数取值，key = RecognizedDim.label */
@@ -52,6 +54,7 @@ export function toSku(r: RecognizedSku, labelToId?: Record<string, string>): Sku
     unit: r.unit,
     packs: r.packs,
   }
+  if (r.packUnit) sku.packUnit = r.packUnit
   if (r.params && labelToId) {
     const params: Record<string, string | number> = {}
     for (const [label, value] of Object.entries(r.params)) {

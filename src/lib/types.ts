@@ -24,6 +24,8 @@ export interface Sku {
   quantity: number // 单件含量数值（如 16）
   unit: string // 单件含量单位（如 g / ml / 个）
   packs: number // 件数 / 袋数（如 8 袋）
+  /** 件数量词（如 袋/瓶/罐/盒），仅用于规格描述展示，不影响计算。缺省回退"袋" */
+  packUnit?: string
   // 旧版单 bonus 字段（保留用于向后兼容，新代码读 params）
   bonusLabel?: string
   bonusValue?: number
@@ -96,6 +98,8 @@ export interface DecisionResult {
   reasons: string[] // 推荐理由
   clusters: SkuCluster[] // 按定价因子聚合后的决策单元
   hasVariants: boolean // 是否存在"同定价多口味"的干扰维度
+  /** 预算偏好下被"超预算"过滤掉的规格数（items 为空时用于区分"没数据"与"预算内无匹配"） */
+  budgetExcluded: number
 }
 
 export type Theme = 'dark' | 'light'

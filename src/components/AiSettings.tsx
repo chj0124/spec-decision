@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { AiConfig } from '../lib/ai'
 import { AI_PRESETS, chat, listModels } from '../lib/ai'
 import { Settings, X, CheckCircle2, AlertCircle, Loader2, ShieldCheck, Zap, RefreshCw, ExternalLink } from 'lucide-react'
@@ -22,10 +22,11 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
   // 当前 baseUrl 对应的预设（用于显示"访问控制台"链接）
   const matchedPreset = AI_PRESETS.find((p) => p.baseUrl && p.baseUrl === form.baseUrl)
 
-  // 弹窗打开时同步外部 config
-  if (open && form !== config && !testing) {
-    // 不强制重置，保留用户正在编辑的内容
-  }
+  // 弹窗打开时同步外部已保存配置；关闭即丢弃未保存的编辑，避免"面板显示与实际生效不一致"
+  useEffect(() => {
+    if (open) setForm(config)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   const applyPreset = (label: string) => {
     const p = AI_PRESETS.find((x) => x.label === label)

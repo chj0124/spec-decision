@@ -460,8 +460,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             onChange={(e) => e.target.files && pickImage(e.target.files)}
           />
         </div>
+      </div>
 
-      {/* AI 生成示例：状态提示 */}
+      {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
       {genSummary && !genError && (
         <div className="flex items-start gap-2 rounded-xl border border-cyan-glow bg-cyan-500 px-3 py-2.5 text-sm text-white">
           <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
@@ -474,7 +475,6 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <span>{genError}（可在右上角「AI 设置」中配置后获得每次不同的真实生成结果。）</span>
         </div>
       )}
-      </div>
 
       {/* AI 识别：扫描进度 / 确认修正 */}
       <AnimatePresence mode="wait">
@@ -988,13 +988,15 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
     update(s.id, { name })
   }
 
-  /** 改规格描述 → 同步解析 含量/单位/数量 */
+  /** 改规格描述 → 同步解析 含量/单位/数量/件数量词 */
   const handleSpec = (newSpec: string) => {
     const parts = parseSpec(newSpec)
     const patch: Partial<Sku> = {}
     if (parts.quantity !== undefined) patch.quantity = parts.quantity
     if (parts.unit) patch.unit = parts.unit
     if (parts.packs !== undefined) patch.packs = parts.packs
+    // 量词跟随描述重建：写了"瓶"存"瓶"，没写量词清空（buildSpec 回退默认）
+    if (parts.packs !== undefined) patch.packUnit = parts.packUnit ?? ''
     const name = flavor.trim() ? `${flavor.trim()} ${newSpec.trim()}`.trim() : newSpec.trim()
     update(s.id, { ...patch, name })
   }
@@ -1002,7 +1004,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
   /** 改 含量/单位/数量 → 同步重建规格描述 */
   const handleField = (field: 'quantity' | 'unit' | 'packs', value: number | string) => {
     const next = { ...s, [field]: value }
-    const spec = buildSpec(next.quantity, next.unit, next.packs)
+    const spec = buildSpec(next.quantity, next.unit, next.packs, next.packUnit)
     const name = flavor.trim() ? `${flavor.trim()} ${spec}`.trim() : spec
     update(s.id, { [field]: value, name })
   }

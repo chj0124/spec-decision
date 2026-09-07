@@ -488,7 +488,7 @@ export function clusterItems(items: ComputedSku[]): SkuCluster[] {
     const minPrice = Math.min(...prices)
     const maxPrice = Math.max(...prices)
     const score = Math.max(...members.map((m) => m.score))
-    const label = `${fmt.num(rep.quantity)}${rep.unit} × ${rep.packs}件`
+    const label = `${fmt.num(rep.quantity)}${rep.unit} × ${rep.packs}${rep.packUnit || '件'}`
 
     clusters.push({
       key,
@@ -546,6 +546,12 @@ export function decide(skus: Sku[], config: DecisionConfig): DecisionResult {
       ? [...sorted].sort((a, b) => a.unitPrice - b.unitPrice)[0]
       : null
 
+  // 预算偏好：统计被"超预算"过滤掉的规格数，供报告页区分"没数据"与"预算内无匹配"
+  const budgetExcluded =
+    config.preference === 'budget' && typeof config.budget === 'number' && config.budget > 0
+      ? scored.filter((i) => i.price > config.budget!).length
+      : 0
+
   const clusters = clusterItems(sorted)
   // 存在「同定价因子、多成员」的簇 → 说明有口味/颜色等干扰维度需要折叠
   const hasVariants = clusters.some((c) => c.members.length > 1)
@@ -559,6 +565,7 @@ export function decide(skus: Sku[], config: DecisionConfig): DecisionResult {
     reasons: best ? buildReasons(best, sorted) : [],
     clusters,
     hasVariants,
+    budgetExcluded,
   }
 }
 
@@ -630,23 +637,31 @@ export interface SpecParts {
   quantity: number
   unit: string
   packs: number
+  /** 件数量词（如 袋/瓶/罐/盒），从描述尾部提取；缺省表示未写量词 */
+  packUnit?: string
 }
+
+/** 常见件数量词（用于规格描述尾部提取，如 "16g×8袋" 的 "袋"） */
+const PACK_UNIT_WORDS = '袋|包|盒|罐|瓶|箱|桶|听|支|条|片|张|本|卷|双|副|把|只|个|件|枚|粒|块'
 
 /**
  * 从规格描述解析结构化字段。
- * 支持："38g×20袋" "16g*8袋" "16gx8" "500ml×6" "8+128" 等。
- * 例："38g×20袋" → { quantity:38, unit:'g', packs:20 }
+ * 支持："38g×20袋" "16g*8袋" "16gx8" "500ml×6瓶" "8+128" 等。
+ * 例："38g×20袋" → { quantity:38, unit:'g', packs:20, packUnit:'袋' }
  */
 export function parseSpec(spec: string): Partial<SpecParts> {
   const t = spec.trim()
   if (!t) return {}
-  // 主模式：数字+单位 ×/x/*/× 数字
-  const m = t.match(/(\d+(?:\.\d+)?)\s*([a-zA-Z\u4e00-\u9fa5]*)\s*[×xX*]\s*(\d+(?:\.\d+)?)/)
+  // 主模式：数字+单位 ×/x/*/× 数字 [量词]
+  const m = t.match(
+    new RegExp(`(\\d+(?:\\.\\d+)?)\\s*([a-zA-Z\\u4e00-\\u9fa5]*)\\s*[×xX*]\\s*(\\d+(?:\\.\\d+)?)\\s*(${PACK_UNIT_WORDS})?`),
+  )
   if (m) {
     return {
       quantity: parseFloat(m[1]),
       unit: m[2] || '',
       packs: Math.max(1, Math.round(parseFloat(m[3]))),
+      ...(m[4] ? { packUnit: m[4] } : {}),
     }
   }
   // 退化：仅 "数字+单位"（无件数）
@@ -657,11 +672,12 @@ export function parseSpec(spec: string): Partial<SpecParts> {
 
 /**
  * 由结构化字段拼出规格描述。
- * 例：{ quantity:38, unit:'g', packs:20 } → "38g×20袋"
+ * 例：{ quantity:38, unit:'g', packs:20, packUnit:'袋' } → "38g×20袋"
+ * packUnit 缺省（手填/旧数据）时回退高频场景的"袋"。
  */
-export function buildSpec(quantity: number, unit: string, packs: number): string {
+export function buildSpec(quantity: number, unit: string, packs: number, packUnit?: string): string {
   if (!(quantity > 0)) return ''
   const q = Number.isInteger(quantity) ? String(quantity) : String(quantity)
   const p = packs > 0 ? packs : 1
-  return `${q}${unit}×${p}袋`
+  return `${q}${unit}×${p}${packUnit || '袋'}`
 }
