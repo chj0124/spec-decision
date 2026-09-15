@@ -251,7 +251,6 @@ export function parseClipboardTable(text: string, html?: string): ParseTableResu
     let quantity: number | undefined
     let unit: string | undefined
     let packs: number | undefined
-    let packUnit: string | undefined
     const params: Record<string, string | number> = {}
 
     for (let i = 0; i < colInfos.length; i++) {

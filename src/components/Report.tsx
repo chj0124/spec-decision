@@ -9,7 +9,7 @@ import {
 import { motion, AnimatePresence, animate } from 'framer-motion'
 import { useChartTheme } from '../lib/useChartTheme'
 import {
-  BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ComposedChart, Line,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
 } from 'recharts'
@@ -27,6 +27,9 @@ interface Props {
 
 const RANK_ICON = [Crown, Medal, Award]
 const RANK_STYLE = ['rank-1', 'rank-2', 'rank-3']
+
+/** 分享链接软上限：超过此长度多数聊天工具/邮件会自动截断，改为优先建议走备份文件 */
+const SHARE_URL_SOFT_LIMIT = 2000
 
 // Recharts Tooltip 内部 label 与每个 item 的文字颜色需要单独指定，
 // 否则它会用默认深色（#333 之类），在深色背景上"融为一体"看不清。
@@ -176,17 +179,33 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 生成只读分享链接并复制（数据压缩进 URL hash，无需后端）
   const [shareCopied, setShareCopied] = useState(false)
   const [sharing, setSharing] = useState(false)
+  // 超长链接护栏：部分聊天工具/邮件会截断超长 URL，超过阈值先提示改用备份文件
+  const [shareTooLong, setShareTooLong] = useState<{ url: string; len: number } | null>(null)
   const copyShareLink = async () => {
     if (!getShareUrl || sharing) return
     setSharing(true)
     try {
       const url = await getShareUrl()
+      if (url.length > SHARE_URL_SOFT_LIMIT) {
+        setShareCopied(false)
+        setShareTooLong({ url, len: url.length })
+        return
+      }
+      setShareTooLong(null)
       await writeClipboard(url)
       setShareCopied(true)
       setTimeout(() => setShareCopied(false), 2500)
     } finally {
       setSharing(false)
     }
+  }
+
+  const forceCopyShareLink = async () => {
+    if (!shareTooLong) return
+    await writeClipboard(shareTooLong.url)
+    setShareTooLong(null)
+    setShareCopied(true)
+    setTimeout(() => setShareCopied(false), 2500)
   }
 
   // 有干扰维度（同定价多口味）时，默认用簇化简视图
@@ -375,6 +394,30 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           )}
         </div>
       </div>
+
+      {shareTooLong && (
+        <div className="rounded-2xl border border-amber-400/40 bg-amber-500/5 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 text-xs text-amber-600 dark:text-amber-400 no-print">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">
+            清单较大，分享链接约 <strong className="tabular">{shareTooLong.len}</strong> 字符，微信 / 邮件等可能自动截断。
+            建议回工作台用「<strong>导出备份</strong>」以文件方式分享，或仍复制该链接。
+          </span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={forceCopyShareLink}
+              className="px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:opacity-90 transition-opacity"
+            >
+              仍要复制链接
+            </button>
+            <button
+              onClick={() => setShareTooLong(null)}
+              className="px-3 py-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand-deep hover:border-brand/50 transition-all"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 单位混杂警告 */}
       {unitWarning && (

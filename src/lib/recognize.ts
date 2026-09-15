@@ -212,8 +212,8 @@ export async function recognizeImages(files: File[]): Promise<RecognizeResult> {
 
   const settled = await Promise.allSettled(files.map((f) => recognizeImage(f)))
 
-  let mergedItems: RecognizedSku[] = []
-  let mergedDims: RecognizedDim[] = []
+  const mergedItems: RecognizedSku[] = []
+  const mergedDims: RecognizedDim[] = []
   let category: string | undefined
   let flavorLabel: string | undefined
   const notes: string[] = []

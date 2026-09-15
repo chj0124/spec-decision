@@ -169,9 +169,6 @@ export default function RecognizeReview({
   const commonUnit = allSame((r) => r.unit) ? rows[0].unit : null
   const commonPacks = allSame((r) => r.packs) ? rows[0].packs : null
   const commonQuantity = allSame((r) => r.quantity) ? rows[0].quantity : null
-  // 规格描述全同：含量+单位+数量都一致即视为全同（parseSpec 拼出来必然一致），用 quantity+unit+packs 判定
-  const commonSpec = commonQuantity && commonUnit && commonPacks
-    ? `${commonQuantity}${commonUnit}×${commonPacks}袋` : null
   const commonPrice = allSame((r) => r.price) ? rows[0].price : null
   // 每个参数维度列是否全同
   const commonDimValues = dimRows.map((d) => allSame((r) => String(r.params?.[d.label] ?? '')) ? String(rows[0].params?.[d.label] ?? '') : null)

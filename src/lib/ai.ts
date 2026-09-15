@@ -199,7 +199,7 @@ export async function listModels(overrideConfig?: AiConfig): Promise<string[]> {
       body: JSON.stringify({ baseUrl: c.baseUrl, apiKey: c.apiKey }),
       signal: controller.signal,
     })
-  } catch (e: any) {
+  } catch {
     clearTimeout(timer)
     throw new Error('AI 代理未连接：请确认本地开发服务器正在运行，或线上已部署代理函数。')
   }

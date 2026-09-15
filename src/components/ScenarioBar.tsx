@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FolderOpen, Plus, Pencil, Trash2, Check, X, AlertTriangle } from 'lucide-react'
+import { FolderOpen, Plus, Pencil, Trash2, Check, X, AlertTriangle, Download, Upload } from 'lucide-react'
 
 export interface ScenarioSummary {
   id: string
@@ -14,18 +14,24 @@ interface Props {
   onCreate: (name: string) => void
   onRename: (id: string, name: string) => void
   onDelete: (id: string) => void
+  onExport: () => void
+  onImport: (file: File) => void
 }
 
 /**
  * 清单条：在多份互相独立的清单之间切换 / 新建 / 重命名 / 删除。
  * 每份清单自带 SKU 与决策配置，便于把「不同商品、不同场景」的比价分开管理。
+ * 尾部提供整份工作区的备份导出 / 还原导入，便于跨设备搬运与防清缓存丢失。
  */
-export default function ScenarioBar({ scenarios, activeId, onSwitch, onCreate, onRename, onDelete }: Props) {
+export default function ScenarioBar({
+  scenarios, activeId, onSwitch, onCreate, onRename, onDelete, onExport, onImport,
+}: Props) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [creating, setCreating] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (editingId || creating) inputRef.current?.focus()
@@ -183,6 +189,36 @@ export default function ScenarioBar({ scenarios, activeId, onSwitch, onCreate, o
           </button>
         )}
       </div>
+
+      <span className="shrink-0 flex items-center gap-0.5 pl-2 border-l border-edge">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) onImport(f)
+            e.target.value = ''
+          }}
+        />
+        <button
+          onClick={onExport}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-brand hover:bg-brand-soft/50 transition-colors"
+          aria-label="导出工作区备份"
+          title="导出备份（JSON，含全部清单）"
+        >
+          <Download className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-brand hover:bg-brand-soft/50 transition-colors"
+          aria-label="导入工作区备份"
+          title="从备份还原（覆盖当前清单）"
+        >
+          <Upload className="h-3.5 w-3.5" />
+        </button>
+      </span>
     </div>
   )
 }

@@ -148,20 +148,29 @@ function migrateToWorkspace(): Workspace {
   return ws
 }
 
+/**
+ * 清洗外部来源（localStorage / 备份文件）的清单数组：
+ * 丢弃结构不完整的项，补全缺省字段，避免脏数据把整份工作区带崩。
+ */
+function sanitizeScenarios(input: unknown): Scenario[] {
+  if (!Array.isArray(input)) return []
+  return (input as Array<Partial<Scenario>>)
+    .filter((s): s is Scenario => Boolean(s && s.id && Array.isArray(s.skus) && s.config))
+    .map((s) => ({
+      ...s,
+      name: s.name || '未命名清单',
+      config: { ...DEFAULT_CONFIG, ...s.config, dims: Array.isArray(s.config.dims) ? s.config.dims : [] },
+      updatedAt: s.updatedAt ?? Date.now(),
+    }))
+}
+
 /** 读取全部清单与当前激活项；无数据或数据损坏时回退到单份旧数据 */
 export function loadWorkspace(): Workspace {
   try {
     const raw = localStorage.getItem(SCENARIOS_KEY)
     if (!raw) return migrateToWorkspace()
     const parsed = JSON.parse(raw) as Partial<Workspace>
-    const scenarios = (Array.isArray(parsed.scenarios) ? parsed.scenarios : [])
-      .filter((s): s is Scenario => Boolean(s && s.id && Array.isArray(s.skus) && s.config))
-      .map((s) => ({
-        ...s,
-        name: s.name || '未命名清单',
-        config: { ...DEFAULT_CONFIG, ...s.config, dims: Array.isArray(s.config.dims) ? s.config.dims : [] },
-        updatedAt: s.updatedAt ?? Date.now(),
-      }))
+    const scenarios = sanitizeScenarios(parsed.scenarios)
     if (scenarios.length === 0) return migrateToWorkspace()
 
     const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
@@ -179,6 +188,46 @@ export function saveWorkspace(ws: Workspace) {
     localStorage.setItem(ACTIVE_KEY, ws.activeId)
   } catch {
     /* 忽略写入失败（如隐私模式配额超限） */
+  }
+}
+
+/* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */
+
+const BACKUP_APP = 'spec-decision'
+const BACKUP_VERSION = 1
+
+export interface WorkspaceBackup {
+  app: string
+  v: number
+  exportedAt: number
+  workspace: Workspace
+}
+
+/** 序列化为备份文本（含校验头，导入时可识别是否为本应用产出） */
+export function exportWorkspace(ws: Workspace): string {
+  const backup: WorkspaceBackup = {
+    app: BACKUP_APP,
+    v: BACKUP_VERSION,
+    exportedAt: Date.now(),
+    workspace: { scenarios: ws.scenarios, activeId: ws.activeId },
+  }
+  return JSON.stringify(backup, null, 2)
+}
+
+/** 解析备份文本；非本应用 / 结构非法 / 清单全空时返回 null，由调用方提示用户 */
+export function importWorkspace(text: string): Workspace | null {
+  try {
+    const parsed = JSON.parse(text) as Partial<WorkspaceBackup>
+    if (!parsed || parsed.app !== BACKUP_APP) return null
+    const raw = parsed.workspace as Partial<Workspace> | undefined
+    const scenarios = sanitizeScenarios(raw?.scenarios)
+    if (scenarios.length === 0) return null
+    const activeId = raw?.activeId && scenarios.some((s) => s.id === raw.activeId)
+      ? raw.activeId
+      : scenarios[0].id
+    return { scenarios, activeId }
+  } catch {
+    return null
   }
 }
 

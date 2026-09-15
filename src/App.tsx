@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
   loadTheme, saveTheme, migrateV1ToV2,
   loadWorkspace, saveWorkspace, newScenario,
+  exportWorkspace, importWorkspace,
 } from './lib/store'
 import type { Scenario, Workspace } from './lib/store'
 import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
@@ -13,10 +14,12 @@ import type { AiConfig } from './lib/ai'
 import { useUnitNormalize } from './lib/useUnitNormalize'
 import { unitMixWarning } from './lib/engine'
 import Workbench from './components/Workbench'
-import Report from './components/Report'
 import AiSettings from './components/AiSettings'
 import ScenarioBar from './components/ScenarioBar'
-import { Sun, Moon, LineChart, PencilLine, Settings, Download, Eye, X } from 'lucide-react'
+import { Sun, Moon, LineChart, PencilLine, Settings, Download, Upload, Eye, X } from 'lucide-react'
+
+// 报告页依赖 recharts（体积较大）且首屏不可见，按需加载以避免拖慢工作台首屏
+const Report = lazy(() => import('./components/Report'))
 
 type Page = 'workbench' | 'report'
 
@@ -44,6 +47,9 @@ export default function App() {
   /** 非空表示正在查看通过链接打开的报告（只读分享视图，不写入本地清单） */
   const [shared, setShared] = useState<ShareData | null>(null)
   const [shareError, setShareError] = useState(false)
+  /** 已解析但待用户确认覆盖的备份；非空时显示导入确认条 */
+  const [pendingImport, setPendingImport] = useState<Workspace | null>(null)
+  const [backupError, setBackupError] = useState(false)
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
@@ -56,6 +62,10 @@ export default function App() {
     const root = document.documentElement
     root.classList.toggle('light', theme === 'light')
     root.classList.toggle('dark', theme === 'dark')
+    // 让移动端状态栏配色跟随应用内主题（而非系统偏好），与页面底色一致
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#16161b' : '#f6f5f0')
   }, [theme])
 
   // 打开带 #r= 的分享链接时，解码后进入只读报告视图
@@ -118,6 +128,37 @@ export default function App() {
       const scenarios = w.scenarios.filter((s) => s.id !== id)
       return { scenarios, activeId: w.activeId === id ? scenarios[0].id : w.activeId }
     })
+
+  /* ---------- 工作区备份 / 还原 ---------- */
+
+  const exportBackup = () => {
+    const json = exportWorkspace(workspace)
+    const d = new Date()
+    const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `规格决策台-备份-${stamp}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportFile = async (file: File) => {
+    const ws = importWorkspace(await file.text())
+    if (!ws) {
+      setBackupError(true)
+      return
+    }
+    setBackupError(false)
+    setPendingImport(ws)
+  }
+
+  const confirmImport = () => {
+    if (!pendingImport) return
+    setWorkspace(pendingImport)
+    setPendingImport(null)
+  }
 
   /* ---------- 分享 ---------- */
 
@@ -184,6 +225,7 @@ export default function App() {
               <button
                 onClick={() => setPage('workbench')}
                 disabled={Boolean(shared)}
+                aria-label="工作台"
                 className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'workbench'
                     ? 'bg-brand text-white shadow-glow'
@@ -196,6 +238,7 @@ export default function App() {
               <button
                 onClick={() => setPage('report')}
                 disabled={result.items.length === 0}
+                aria-label="报告"
                 className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'report'
                     ? 'bg-brand text-white shadow-glow'
@@ -249,6 +292,8 @@ export default function App() {
             onCreate={createScenario}
             onRename={renameScenario}
             onDelete={deleteScenario}
+            onExport={exportBackup}
+            onImport={handleImportFile}
           />
         )}
 
@@ -260,6 +305,45 @@ export default function App() {
             <button onClick={() => setShareError(false)} className="hover:text-amber-400" aria-label="关闭提示">
               <X className="h-3.5 w-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* 备份文件无法识别时的提示 */}
+        {backupError && (
+          <div className="glass rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-amber-500 border-amber-400/40">
+            <AlertIcon />
+            <span className="flex-1">备份文件无法识别：不是本应用导出的 JSON，或内容已损坏。</span>
+            <button onClick={() => setBackupError(false)} className="hover:text-amber-400" aria-label="关闭提示">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* 导入备份前的覆盖确认（导入会整体替换当前清单） */}
+        {pendingImport && (
+          <div className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+              <Upload className="h-4 w-4 text-brand shrink-0" />
+              <span>
+                备份含<strong className="text-brand-deep dark:text-brand">{pendingImport.scenarios.length}</strong> 份清单、
+                {pendingImport.scenarios.reduce((n, s) => n + s.skus.length, 0)} 个规格
+                · 导入将<strong>覆盖</strong>当前 {workspace.scenarios.length} 份清单
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={confirmImport}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand text-white hover:opacity-90 transition-opacity"
+              >
+                覆盖导入
+              </button>
+              <button
+                onClick={() => setPendingImport(null)}
+                className="text-xs px-3 py-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand-deep hover:border-brand/50 transition-all"
+              >
+                取消
+              </button>
+            </div>
           </div>
         )}
 
@@ -300,15 +384,17 @@ export default function App() {
               onConfigChange={setConfig}
             />
           ) : (
-            <Report
-              result={result}
-              config={config}
-              unitWarning={unitMixWarning(normalizedSkus)}
-              onBack={handleBack}
-              onPreferenceChange={handlePreferenceChange}
-              onBudgetChange={handleBudgetChange}
-              getShareUrl={shared ? undefined : getShareUrl}
-            />
+            <Suspense fallback={<ReportFallback />}>
+              <Report
+                result={result}
+                config={config}
+                unitWarning={unitMixWarning(normalizedSkus)}
+                onBack={handleBack}
+                onPreferenceChange={handlePreferenceChange}
+                onBudgetChange={handleBudgetChange}
+                getShareUrl={shared ? undefined : getShareUrl}
+              />
+            </Suspense>
           )}
         </div>
       </main>
@@ -316,6 +402,20 @@ export default function App() {
       <footer className="max-w-7xl mx-auto px-6 pb-8 text-center text-xs text-slate-500">
         数据仅保存在你的浏览器本地 · 纯前端工具 · 不上传任何信息
       </footer>
+    </div>
+  )
+}
+
+/** 报告页懒加载占位骨架，避免切换瞬间白屏 */
+function ReportFallback() {
+  return (
+    <div className="space-y-5 sm:space-y-6" aria-busy="true" aria-label="报告加载中">
+      <div className="glass rounded-2xl h-28 animate-pulse" />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="glass rounded-2xl h-80 animate-pulse" />
+        <div className="glass rounded-2xl h-80 animate-pulse" />
+      </div>
+      <div className="glass rounded-2xl h-56 animate-pulse" />
     </div>
   )
 }

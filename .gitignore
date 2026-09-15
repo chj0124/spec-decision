@@ -12,6 +12,8 @@ Thumbs.db
 *.log
 # 临时测试文件
 *.mjs
+# 但 e2e 冒烟脚本是仓库资产，必须提交
+!e2e/*.mjs
 # Playwright
 test-results/
 playwright-report/

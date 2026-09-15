@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== 字体自托管：Space Grotesk 可变字体（latin 子集）
+   设为 font-weight 300 700 走真实字重；改为本地文件后不再请求 Google Fonts，
+   既省一次外链往返，也避免向第三方暴露访客 IP。 */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/space-grotesk-latin.woff2') format('woff2');
+}
+
 /* ===== 设计令牌：亮 / 暗主题 CSS 变量 =====
    panel / edge / brand-soft / brand-deep 由变量驱动，
    Tailwind 里以 rgb(var(--x) / <alpha-value>) 注册，切换 html.dark 即整站换肤 */

@@ -1,0 +1,26 @@
+{
+  "name": "规格决策台 · 买哪个最划算",
+  "short_name": "规格决策台",
+  "description": "纯前端多规格比价工具：录入 SKU 自动算单位价与综合得分，输出推荐规格、排名与避坑提示，数据只留在本地浏览器。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f5f0",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

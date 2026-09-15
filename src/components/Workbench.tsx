@@ -2,20 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
-import { recognizeImage, recognizeImages, toSku } from '../lib/recognize'
+import { recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
 import RecognizeReview from './RecognizeReview'
-import { useChartTheme } from '../lib/useChartTheme'
+import WeightPie from './WeightPie'
 import {
   Plus, Trash2, ImagePlus, Loader2,
   Sparkles, ArrowRight, UploadCloud, ChevronDown,
   Sliders, PieChart as PieIcon, X, AlertCircle, Scale,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 
 /**
  * 根据内容自动调整宽度的 input。
@@ -200,7 +199,6 @@ const GROUP_BAR_COLORS = [
 ]
 
 export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange }: Props) {
-  const chartTheme = useChartTheme()
   const [scanning, setScanning] = useState(false)
   const [scanPreviews, setScanPreviews] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
@@ -826,32 +824,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                     <PieIcon className="h-3.5 w-3.5" /> 权重分布
                   </div>
                   {pieData.length > 0 ? (
-                    <div className="w-full h-44">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={pieData}
-                            dataKey="value"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            outerRadius={70}
-                            innerRadius={36}
-                            paddingAngle={2}
-                          >
-                            {pieData.map((entry, idx) => (
-                              <Cell key={idx} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            contentStyle={chartTheme.tooltipStyle}
-                            labelStyle={chartTheme.tooltipLabelStyle}
-                            itemStyle={chartTheme.tooltipItemStyle}
-                            formatter={(v: number) => `${v}`}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <WeightPie data={pieData} />
                   ) : (
                     <div className="h-44 grid place-items-center text-xs text-slate-500">
                       所有权重为 0

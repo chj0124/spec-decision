@@ -23,6 +23,9 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+      // AI 上游（OpenAI 兼容接口 / 视觉模型）返回的是无 schema 的 JSON，
+      // 在解析边界保留 any 并降级为 warn：为上游响应造精确类型收益低、且易随上游漂移。
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
 )
