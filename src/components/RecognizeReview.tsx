@@ -176,9 +176,9 @@ export default function RecognizeReview({
   const hasAnyFlavor = rows.some((r) => parseFlavor(r.name).flavor)
   // 收集所有折叠列的说明文案
   const foldedNotes: string[] = []
-  if (commonUnit) foldedNotes.push(`单位「${commonUnit}」`)
-  if (commonPacks) foldedNotes.push(`数量「${commonPacks}件」`)
-  if (commonQuantity) foldedNotes.push(`含量「${commonQuantity}」`)
+  if (commonUnit) foldedNotes.push(`计量单位「${commonUnit}」`)
+  if (commonPacks) foldedNotes.push(`件数「${commonPacks}」`)
+  if (commonQuantity) foldedNotes.push(`单件含量「${commonQuantity}」`)
   if (commonPrice) foldedNotes.push(`总价「¥${commonPrice}」`)
   dimRows.forEach((d, i) => {
     if (commonDimValues[i]) foldedNotes.push(`${d.label}「${commonDimValues[i]}」`)
@@ -372,11 +372,11 @@ export default function RecognizeReview({
                   style={{ gridTemplateColumns: tpl }}
                 >
                   <span>{flavorLabel}</span>
-                  <span>规格（重量×数量）</span>
+                  <span>规格（含量×件数）</span>
                   {!commonPrice && <span>总价 ¥</span>}
-                  {!commonQuantity && <span>含量</span>}
-                  {!commonUnit && <span>单位</span>}
-                  {!commonPacks && <span>数量</span>}
+                  {!commonQuantity && <span>单件含量</span>}
+                  {!commonUnit && <span>计量单位</span>}
+                  {!commonPacks && <span>件数</span>}
                   {dimRows.map((d, i) => !commonDimValues[i] && (
                     <span key={i} className="text-brand/80" title={`${d.label} ${PARAM_TYPE_LABEL[d.type]}`}>
                       {d.label}{d.unit ? `(${d.unit})` : ''} {PARAM_TYPE_LABEL[d.type]}

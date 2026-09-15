@@ -1,5 +1,5 @@
 import type { Sku, ParamType } from './types'
-import { uid } from './engine'
+import { uid, parseFlavor, parseSpec, buildName, stripFlavorCategory, isContentUnit, normalizePackUnit } from './engine'
 import { isVisionReady, visionChat } from './ai'
 
 /** AI 识别出的参数维度定义（无 id/weight，导入时再生成） */
@@ -107,19 +107,28 @@ export const RECOGNIZE_PROMPT = `识别截图里所有商品 SKU 规格。直接
 - levels: 仅 text 类型需要，按从优到劣排列
 
 规格列表 items（每个 SKU）：
-- name: 规格名称（含口味/颜色等偏好属性，如"香辣味 16g×8袋"）
-- price: 总价（元，纯数字）
-- quantity: 单件含量数值（数码/五金等计件商品填1）
+- name: 规格名称，格式固定为「首词 含量单位×件数量词」（如"香辣味 16g×8袋"）。规格部分只用全角 ×、只保留「含量×件数」两段，不要带"整箱/箱装/促销"等词
+- price: 总价（元，纯数字）。同一张图内价格口径必须一致：优先取"券后价/到手价/百亿补贴价"，都没有才取原价
+- quantity: 单件（单瓶/单袋/单个）含量数值，不是整箱总量；数码/五金等计件商品填1
 - unit: 单位（g/ml/个/GB/mm等）
-- packs: 件数（计件商品填1）
+- packs: 件数，按最小可比单位（瓶/袋/罐/片/抽）计数。整箱要先把乘法算好：「300ml×12瓶×2箱」填 24、「500ml×24瓶」填 24。计件商品填1
 - params: 对象，key=维度label，value=该SKU在该维度的值；无维度时省略或空对象
 - confidence: 把握 0-1
+
+首词（口味/颜色/型号）写法要求（决定"口味列"，务必干净）：
+- 只写口味/颜色/型号本身，1-4 个字，如"橙味""草莓味""黑色""M4"
+- 禁止把品牌名（如"芬达""可口可乐""乐事"）写进首词
+- 禁止把品类词（如"汽水""饮料""可乐""矿泉水""箱""整箱"）写进首词
+- 一份商品包含多种口味/品牌混装时，首词统一写"混装"
 
 示例（手机）：
 {"category":"手机","flavorLabel":"颜色","dims":[{"label":"内存","type":"higher-better","unit":"GB"},{"label":"电池容量","type":"higher-better","unit":"mAh"}],"items":[{"name":"8GB+256GB 黑色","price":2999,"quantity":1,"unit":"个","packs":1,"params":{"内存":8,"电池容量":5000},"confidence":0.9}]}
 
 示例（零食，口味进名称不进维度）：
 {"category":"零食","flavorLabel":"口味","dims":[{"label":"净含量","type":"higher-better","unit":"g"}],"items":[{"name":"香辣味 16g×8袋","price":4.94,"quantity":16,"unit":"g","packs":8,"params":{"净含量":16},"confidence":0.95}]}
+
+示例（饮料，整箱先乘好件数、首词不带品牌与品类词）：
+{"category":"饮料","flavorLabel":"口味","dims":[],"items":[{"name":"橙味 300ml×24瓶","price":27.91,"quantity":300,"unit":"ml","packs":24,"confidence":0.95},{"name":"混装 888ml×12瓶","price":34.4,"quantity":888,"unit":"ml","packs":12,"confidence":0.9}]}
 
 示例（螺丝，无可量化对比参数，dims 为空）：
 {"category":"五金螺丝","flavorLabel":"型号","dims":[],"items":[{"name":"M4×10mm 不锈钢内六角","price":9.9,"quantity":1,"unit":"个","packs":100,"confidence":0.85}]}
@@ -331,22 +340,37 @@ function parseDims(raw: any): RecognizedDim[] {
     .filter((d: RecognizedDim | null): d is RecognizedDim => d !== null)
 }
 
-function parseItems(raw: any, dims: RecognizedDim[]): RecognizedSku[] {
+/** 纯函数：把模型返回的 items 归一为收录用 SKU。导出以便单测规格归一逻辑。 */
+export function parseItems(raw: any, dims: RecognizedDim[]): RecognizedSku[] {
   if (!Array.isArray(raw)) return []
   const knownLabels = new Set(dims.map((d) => d.label))
   return raw
     .map((it: any): RecognizedSku | null => {
-      const name = String(it?.name ?? '').trim()
-      if (!name) return null
+      const rawName = String(it?.name ?? '').trim()
+      if (!rawName) return null
       const price = Number(it?.price) || 0
       if (price <= 0) return null
       const sku: RecognizedSku = {
-        name,
+        name: rawName,
         price,
         quantity: Number(it?.quantity) || 1,
-        unit: String(it?.unit ?? '个'),
+        unit: String(it?.unit ?? '个').trim() || '个',
         packs: Math.max(1, parseInt(it?.packs) || 1),
         confidence: typeof it?.confidence === 'number' ? it.confidence : 0.8,
+      }
+      // 含量型商品（g/ml 等）做确定性归一，修正三类会让 SKU 录错的硬错误：
+      // 1) 口味首词剥离"汽水/饮料"等品类词，避免同口味被拆成多组；
+      // 2) 件数改用规格串的连乘结果，修正 AI 在"12瓶×2箱"这类整箱写法上的乘法错误；
+      // 3) 用结构化字段重拼 name，保证规格列格式统一（全角 ×、件数在外、不带"整箱"等杂质）。
+      if (isContentUnit(sku.unit)) {
+        const sp = parseSpec(rawName)
+        if (sp.quantity !== undefined && sp.quantity > 0) sku.quantity = sp.quantity
+        if (sp.unit) sku.unit = sp.unit
+        if (sp.packs !== undefined) sku.packs = sp.packs
+        const flavor = stripFlavorCategory(parseFlavor(rawName).flavor)
+        const packUnit = normalizePackUnit(sp.packUnit)
+        sku.name = buildName(flavor, sku.quantity, sku.unit, sku.packs, packUnit)
+        if (packUnit) sku.packUnit = packUnit
       }
       // 只保留已知维度的 params，过滤掉模型瞎编的字段
       if (it?.params && typeof it.params === 'object') {

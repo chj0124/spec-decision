@@ -18,6 +18,59 @@ export function parseFlavor(name: string): { flavor: string; spec: string } {
   return { flavor: '', spec: trimmed }
 }
 
+/**
+ * 品类/包装词：被拼进「口味」首词时属于污染（如"橙味汽水"、"柠檬味饮料"）。
+ * 这些词描述的是商品品类而非口味本身，剥掉后才能让同口味的规格归到同一组。
+ * 按长词优先匹配后缀，且剥离后必须非空（避免"汽水"被清成空串）。
+ */
+const FLAVOR_CATEGORY_SUFFIXES = [
+  '气泡水', '苏打水', '矿泉水', '纯净水', '饮用水', '果味水',
+  '汽水', '饮料', '可乐', '果汁', '果茶', '奶茶', '茶饮',
+  '酸奶', '牛奶', '乳饮', '矿泉',
+]
+
+/**
+ * 从口味首词剥离尾部的品类词。
+ * 例："橙味汽水" → "橙味"；"芬达" / "香辣味" 原样返回（无法从词形判断品牌或真口味）。
+ */
+export function stripFlavorCategory(flavor: string): string {
+  let f = flavor.trim()
+  for (const w of FLAVOR_CATEGORY_SUFFIXES) {
+    if (f.length > w.length && f.endsWith(w)) {
+      f = f.slice(0, -w.length)
+      break
+    }
+  }
+  return f
+}
+
+/**
+ * 含量型计量单位（质量 / 体积）。
+ * 只有这类单位才用「含量×件数」的规格写法，也才适合把 AI 名称重建为规范写法；
+ * 手机（个/GB）、螺丝（mm）、纸巾（抽）等不能套用，否则 "M4×10mm" 会被误改成 "4×10袋"。
+ */
+const CONTENT_UNITS = new Set([
+  'g', 'kg', 'mg', 'ml', 'l', 'dl', 'cl', 'cc',
+  '克', '千克', '公斤', '毫克', '毫升', '升', '斤', '两',
+])
+
+/** 是否为含量型单位（质量/体积），大小写与首尾空白不敏感 */
+export function isContentUnit(unit: string): boolean {
+  return CONTENT_UNITS.has(unit.trim().toLowerCase())
+}
+
+/**
+ * 批量 / 外箱量词：比价看的是最小可比单位（瓶/袋），这类词只描述包装层级，
+ * 不进展示量词（"888ml*12整箱" 应展示为 "888ml×12瓶"）。
+ */
+const BULK_PACK_UNITS = ['箱', '件', '提', '板', '托', '组']
+
+/** 归一化件数量词：批量/外箱量词一律丢弃（交给 buildSpec 按单位回退），其余原样返回 */
+export function normalizePackUnit(packUnit?: string): string | undefined {
+  if (!packUnit) return undefined
+  return BULK_PACK_UNITS.includes(packUnit.trim()) ? undefined : packUnit
+}
+
 /** 按指定维度对 SKU 分组（用于录入表格的折叠展示） */
 export function groupSkus(skus: Sku[], by: GroupBy): Array<{ key: string; items: Sku[] }> {
   const map = new Map<string, Sku[]>()
@@ -113,4 +166,15 @@ export function buildSpec(quantity: number, unit: string, packs: number, packUni
   const q = String(quantity)
   const p = packs > 0 ? packs : 1
   return `${q}${unit}×${p}${packUnit || DEFAULT_PACK_UNIT[unit] || '袋'}`
+}
+
+/**
+ * 由「口味 + 结构化字段」拼出规范名称：`口味 含量单位×件数量词`。
+ * 识别结果一律走这里重建 name，保证规格列永远是 parseSpec 可往返的标准写法，
+ * 不再出现 "*" 分隔符、件数没乘好、品类词混进规格列等对不齐的问题。
+ */
+export function buildName(flavor: string, quantity: number, unit: string, packs: number, packUnit?: string): string {
+  const spec = buildSpec(quantity, unit, packs, packUnit)
+  const f = flavor.trim()
+  return f ? `${f} ${spec}`.trim() : spec
 }

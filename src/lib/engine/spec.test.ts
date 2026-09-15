@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { parseFlavor, parseSpec, buildSpec, groupSkus } from './spec'
+import {
+  parseFlavor,
+  parseSpec,
+  buildSpec,
+  buildName,
+  stripFlavorCategory,
+  isContentUnit,
+  normalizePackUnit,
+  groupSkus,
+} from './spec'
 import type { Sku } from '../types'
 
 const sku = (over: Partial<Sku> = {}): Sku => ({
@@ -114,5 +123,92 @@ describe('groupSkus 分组折叠', () => {
   it('按件数分组', () => {
     const groups = groupSkus([sku({ packs: 1 }), sku({ packs: 4 }), sku({ packs: 4 })], 'packs')
     expect(groups.find((g) => g.key === '4件')?.items).toHaveLength(2)
+  })
+})
+
+describe('stripFlavorCategory 口味首词剥离品类词', () => {
+  // 回归守卫：AI 常把品类词拼进口味首词（"橙味汽水"），
+  // 导致同口味的规格被拆成多组、口味列被污染成半个商品名。
+  it('剥离尾部品类词', () => {
+    expect(stripFlavorCategory('橙味汽水')).toBe('橙味')
+    expect(stripFlavorCategory('柠檬味饮料')).toBe('柠檬味')
+    expect(stripFlavorCategory('葡萄味气泡水')).toBe('葡萄味')
+  })
+
+  it('真实口味/无后缀词原样返回', () => {
+    expect(stripFlavorCategory('香辣味')).toBe('香辣味')
+    expect(stripFlavorCategory('芬达')).toBe('芬达')
+    expect(stripFlavorCategory('原味')).toBe('原味')
+  })
+
+  it('剥离后不得为空，纯品类词保留', () => {
+    expect(stripFlavorCategory('汽水')).toBe('汽水')
+    expect(stripFlavorCategory('可乐')).toBe('可乐')
+  })
+
+  it('首尾空白不敏感', () => {
+    expect(stripFlavorCategory('  橙味汽水  ')).toBe('橙味')
+  })
+})
+
+describe('isContentUnit 含量型单位判定', () => {
+  it('质量 / 体积单位判为含量型', () => {
+    expect(isContentUnit('g')).toBe(true)
+    expect(isContentUnit('ml')).toBe(true)
+    expect(isContentUnit('L')).toBe(true)
+    expect(isContentUnit('毫升')).toBe(true)
+  })
+
+  it('大小写与空白不敏感', () => {
+    expect(isContentUnit('ML')).toBe(true)
+    expect(isContentUnit(' ml ')).toBe(true)
+  })
+
+  // 回归守卫：手机（个/GB）、螺丝（mm）、纸巾（抽）不能套用「含量×件数」写法，
+  // 否则 "M4×10mm" 会被误改成 "4×10袋"。
+  it('非含量型单位不为真', () => {
+    expect(isContentUnit('个')).toBe(false)
+    expect(isContentUnit('mm')).toBe(false)
+    expect(isContentUnit('抽')).toBe(false)
+    expect(isContentUnit('GB')).toBe(false)
+  })
+})
+
+describe('normalizePackUnit 件数量词归一', () => {
+  it('批量/外箱量词丢弃，交给单位回退', () => {
+    expect(normalizePackUnit('箱')).toBeUndefined()
+    expect(normalizePackUnit('件')).toBeUndefined()
+    expect(normalizePackUnit('提')).toBeUndefined()
+  })
+
+  it('最小可比量词保留', () => {
+    expect(normalizePackUnit('瓶')).toBe('瓶')
+    expect(normalizePackUnit('袋')).toBe('袋')
+  })
+
+  it('空值返回 undefined', () => {
+    expect(normalizePackUnit()).toBeUndefined()
+    expect(normalizePackUnit('')).toBeUndefined()
+  })
+})
+
+describe('buildName 规范名称重建', () => {
+  it('口味 + 规格，全角 ×', () => {
+    expect(buildName('橙味', 300, 'ml', 24, '瓶')).toBe('橙味 300ml×24瓶')
+  })
+
+  it('缺省 packUnit 按单位回退', () => {
+    expect(buildName('橙味', 300, 'ml', 24)).toBe('橙味 300ml×24瓶')
+    expect(buildName('香辣味', 38, 'g', 20)).toBe('香辣味 38g×20袋')
+  })
+
+  it('口味为空时只输出规格', () => {
+    expect(buildName('', 500, 'ml', 6, '瓶')).toBe('500ml×6瓶')
+  })
+
+  it('与 parseFlavor / parseSpec 往返一致', () => {
+    const name = buildName('混装', 888, 'ml', 12, '瓶')
+    expect(parseFlavor(name)).toEqual({ flavor: '混装', spec: '888ml×12瓶' })
+    expect(parseSpec(name)).toEqual({ quantity: 888, unit: 'ml', packs: 12, packUnit: '瓶' })
   })
 })

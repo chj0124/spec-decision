@@ -1168,11 +1168,11 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
               <tr>
                 <th className={`${TH_BASE} w-8`}>#</th>
                 <th className={TH_BASE}>{flavorLabel}</th>
-                <th className={TH_BASE}>规格（重量×数量）</th>
+                <th className={TH_BASE}>规格（含量×件数）</th>
                 <th className={TH_BASE}>总价 ¥</th>
                 <th className={TH_BASE}>单件含量</th>
-                <th className={TH_BASE}>单位</th>
-                <th className={TH_BASE}>数量</th>
+                <th className={TH_BASE}>计量单位</th>
+                <th className={TH_BASE}>件数</th>
                 {config.dims.map((dim) => (
                   <th key={dim.id} className={TH_BASE}>
                     {dim.label}
@@ -1415,7 +1415,7 @@ function RowFields({ s, idx, update, updateParam, remove, duplicate, indented, d
           className="field py-1.5 text-xs"
         />
       </td>
-      {/* 规格（重量×数量），与含量/单位/数量双向同步 */}
+      {/* 规格（含量×件数），与单件含量/计量单位/件数双向同步 */}
       <td className="px-3 py-2">
         <AutoWidthInput
           value={spec}
@@ -1454,7 +1454,7 @@ function RowFields({ s, idx, update, updateParam, remove, duplicate, indented, d
           onChange={(e) => handleField('unit', e.target.value)}
           placeholder="g"
           list="unit-options"
-          minWidth={36}
+          minWidth={48}
           className="field py-1.5 text-xs"
         />
       </td>
@@ -1611,7 +1611,7 @@ function SkuRowCard({ s, idx, update, updateParam, remove, duplicate, dims, flav
           />
         </label>
         <label className="block min-w-0">
-          <span className="text-[10px] text-slate-400 mb-0.5 block">单位</span>
+          <span className="text-[10px] text-slate-400 mb-0.5 block">计量单位</span>
           <input
             value={s.unit}
             onChange={(e) => handleField('unit', e.target.value)}
@@ -1621,7 +1621,7 @@ function SkuRowCard({ s, idx, update, updateParam, remove, duplicate, dims, flav
           />
         </label>
         <label className="block min-w-0">
-          <span className="text-[10px] text-slate-400 mb-0.5 block">数量</span>
+          <span className="text-[10px] text-slate-400 mb-0.5 block">件数</span>
           <input
             type="number" min={1} value={s.packs || ''}
             onChange={(e) => handleField('packs', parseInt(e.target.value) || 1)}
