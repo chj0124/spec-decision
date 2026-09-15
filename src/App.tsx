@@ -71,7 +71,7 @@ export default function App() {
               <h1 className="font-bold text-base sm:text-lg tracking-tight truncate">
                 规格决策台
               </h1>
-              <p className="text-sm text-slate-500 hidden sm:block">
+              <p className="text-xs text-slate-500 hidden sm:block">
                 多 SKU 比价 · 找出最划算的那一个
               </p>
             </div>

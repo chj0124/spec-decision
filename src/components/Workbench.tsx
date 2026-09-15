@@ -12,7 +12,7 @@ import { useChartTheme } from '../lib/useChartTheme'
 import {
   Plus, Trash2, ImagePlus, Loader2,
   Sparkles, ArrowRight, UploadCloud, ChevronDown,
-  Sliders, PieChart as PieIcon, X, AlertCircle,
+  Sliders, PieChart as PieIcon, X, AlertCircle, Scale,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
@@ -59,6 +59,97 @@ interface Props {
   onGenerate: () => void
   config: DecisionConfig
   onConfigChange: (c: DecisionConfig) => void
+}
+
+/** 表头单元格公共样式：吸附在表格滚动容器顶部，实心底避免内容透出 */
+const TH_BASE =
+  'sticky top-0 z-10 bg-brand-soft border-b border-edge px-3 py-3 font-medium text-left text-sm text-slate-500'
+
+/** 单行 SKU 的派生状态与「口味/规格/含量/单位/数量」双向同步编辑逻辑（桌面表格行与移动端卡片共用） */
+function useSkuRow(s: Sku, update: (id: string, patch: Partial<Sku>) => void) {
+  const total = s.quantity * Math.max(1, s.packs)
+  const up = total > 0 && s.price > 0 ? s.price / total : 0
+  const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
+  const { flavor, spec } = parseFlavor(s.name)
+
+  const setName = (newFlavor: string, newSpec: string) => {
+    const name = newFlavor.trim() ? `${newFlavor.trim()} ${newSpec.trim()}`.trim() : newSpec.trim()
+    update(s.id, { name })
+  }
+
+  /** 改规格描述 → 同步解析 含量/单位/数量/件数量词 */
+  const handleSpec = (newSpec: string) => {
+    const parts = parseSpec(newSpec)
+    const patch: Partial<Sku> = {}
+    if (parts.quantity !== undefined) patch.quantity = parts.quantity
+    if (parts.unit) patch.unit = parts.unit
+    if (parts.packs !== undefined) patch.packs = parts.packs
+    // 量词跟随描述重建：写了"瓶"存"瓶"，没写量词清空（buildSpec 回退默认）
+    if (parts.packs !== undefined) patch.packUnit = parts.packUnit ?? ''
+    const name = flavor.trim() ? `${flavor.trim()} ${newSpec.trim()}`.trim() : newSpec.trim()
+    update(s.id, { ...patch, name })
+  }
+
+  /** 改 含量/单位/数量 → 同步重建规格描述 */
+  const handleField = (field: 'quantity' | 'unit' | 'packs', value: number | string) => {
+    const next = { ...s, [field]: value }
+    const spec = buildSpec(next.quantity, next.unit, next.packs, next.packUnit)
+    const name = flavor.trim() ? `${flavor.trim()} ${spec}`.trim() : spec
+    update(s.id, { [field]: value, name })
+  }
+
+  return { total, up, incomplete, flavor, spec, setName, handleSpec, handleField }
+}
+
+/** 维度值输入控件：按维度类型渲染 数字 / 是否 / 评级（桌面表格行与移动端卡片共用） */
+function DimInput({ dim, s, updateParam, className = '' }: {
+  dim: ParamDim
+  s: Sku
+  updateParam: (id: string, dimId: string, value: ParamValue) => void
+  className?: string
+}) {
+  const raw = s.params?.[dim.id]
+  if (dim.type === 'boolean') {
+    const boolValue = typeof raw === 'string' ? raw : (typeof raw === 'boolean' && raw ? 'yes' : 'no')
+    return (
+      <select
+        value={boolValue}
+        onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
+        className={`field py-1.5 text-xs min-w-[80px] ${className}`}
+      >
+        <option value="no">否</option>
+        <option value="yes">是</option>
+      </select>
+    )
+  }
+  if (dim.type === 'text') {
+    const levels = dim.levels ?? []
+    return (
+      <select
+        value={typeof raw === 'string' ? raw : ''}
+        onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
+        className={`field py-1.5 text-xs min-w-[88px] ${className}`}
+      >
+        <option value="">—</option>
+        {levels.map((lv) => (
+          <option key={lv} value={lv}>{lv}</option>
+        ))}
+      </select>
+    )
+  }
+  // 数值型：higher-better / lower-better
+  return (
+    <AutoWidthInput
+      type="number"
+      value={typeof raw === 'number' ? raw : ''}
+      onChange={(e) =>
+        updateParam(s.id, dim.id, e.target.value === '' ? undefined : parseFloat(e.target.value))
+      }
+      placeholder={dim.unit ?? '0'}
+      minWidth={56} extra={24}
+      className={`field py-1.5 text-xs tabular ${className}`}
+    />
+  )
 }
 
 const emptySku = (): Sku => ({
@@ -141,6 +232,35 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
   const remove = (id: string) => onChange(skus.filter((s) => s.id !== id))
   const add = () => onChange([...skus, emptySku()])
+
+  // 表格键盘导航：Enter 跳下一格，Ctrl/Cmd+Enter 快速加行并聚焦新行首格
+  const tableRef = useRef<HTMLTableElement>(null)
+  const focusNewRow = useRef(false)
+
+  useEffect(() => {
+    if (!focusNewRow.current) return
+    focusNewRow.current = false
+    const rows = tableRef.current?.querySelectorAll('tbody tr')
+    const last = rows?.[rows.length - 1]
+    ;(last?.querySelector('input') as HTMLElement | null)?.focus()
+  }, [skus])
+
+  const handleTableKey = (e: React.KeyboardEvent<HTMLTableElement>) => {
+    if (e.key !== 'Enter') return
+    const t = e.target as HTMLElement
+    if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return
+    e.preventDefault()
+    if (e.ctrlKey || e.metaKey) {
+      focusNewRow.current = true
+      add()
+      return
+    }
+    const fields = Array.from(
+      tableRef.current?.querySelectorAll('tbody input, tbody select') ?? [],
+    )
+    const next = fields[fields.indexOf(t) + 1] as HTMLElement | undefined
+    next?.focus()
+  }
 
   // AI 生成示例：调用 generator（已配置 AI 则实时生成，否则回退内置真实模板）
   const [genLoading, setGenLoading] = useState(false)
@@ -565,7 +685,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <div className="flex items-center gap-2">
             <Sliders className="h-4 w-4 text-brand" />
             <span className="text-sm font-semibold">参数维度与权重</span>
-            <span className="text-sm text-slate-500">
+            <span className="text-xs text-slate-500">
               {config.dims.length === 0
                 ? '（仅按价格比价，点击展开添加维度）'
                 : `共 ${config.dims.length} 个维度 + 价格`}
@@ -595,7 +715,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       disabled
                       className="field py-1.5 text-xs flex-1 opacity-70"
                     />
-                    <span className="text-sm text-slate-500 w-16 text-center">越小越好</span>
+                    <span className="text-xs text-slate-500 w-16 text-center">越小越好</span>
                     <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                       {WEIGHT_TIERS.map((t) => (
                         <button
@@ -745,11 +865,19 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         </AnimatePresence>
       </div>
 
-      {/* SKU 表格：拆口味列 + 可按 口味/重量/数量 分组折叠 */}
+      {/* SKU 表格：拆口味列 + 可按 口味/重量/数量 分组折叠；无数据时显示快速入门 */}
+      {skus.length === 0 ? (
+        <EmptyState
+          genLoading={genLoading}
+          onGenExample={handleGenExample}
+          onPickImage={() => fileRef.current?.click()}
+          onAdd={add}
+        />
+      ) : (
       <div className="glass rounded-2xl overflow-hidden">
         {/* 分组折叠工具栏 */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
-          <span className="text-sm text-slate-500">分组折叠：</span>
+          <span className="text-xs text-slate-500">分组折叠：</span>
           {(() => {
             // 动态构建分组选项，并过滤掉无区分意义的（所有 SKU 在该维度值相同）
             const allOptions: Array<{ key: string; label: string; getValue: (s: Sku) => string }> = [
@@ -794,36 +922,37 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           {groupBy && (
             <button
               onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}
-              className="text-sm text-slate-500 hover:text-slate-600 ml-1"
+              className="text-xs text-slate-500 hover:text-brand-deep ml-1"
             >
               取消分组
             </button>
           )}
-          <span className="text-sm text-slate-600 ml-auto hidden sm:block">
-            折叠后只看不关心的维度，聚焦对比
+          <span className="text-xs text-slate-400 ml-auto hidden sm:block">
+            Enter 跳转下一格 · Ctrl+Enter 快速加行
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[960px]">
+        {/* 桌面表格：内部滚动 + 吸附表头；移动端为卡片式录入 */}
+        <div className="hidden sm:block overflow-auto max-h-[72vh]">
+          <table ref={tableRef} onKeyDown={handleTableKey} className="w-full text-sm min-w-[960px]">
             <thead>
-              <tr className="border-b border-edge bg-brand-soft/30 text-left text-sm text-slate-500">
-                <th className="px-3 py-3 font-medium w-8">#</th>
-                <th className="px-3 py-3 font-medium">{flavorLabel}</th>
-                <th className="px-3 py-3 font-medium">规格（重量×数量）</th>
-                <th className="px-3 py-3 font-medium">总价 ¥</th>
-                <th className="px-3 py-3 font-medium">单件含量</th>
-                <th className="px-3 py-3 font-medium">单位</th>
-                <th className="px-3 py-3 font-medium">数量</th>
+              <tr>
+                <th className={`${TH_BASE} w-8`}>#</th>
+                <th className={TH_BASE}>{flavorLabel}</th>
+                <th className={TH_BASE}>规格（重量×数量）</th>
+                <th className={TH_BASE}>总价 ¥</th>
+                <th className={TH_BASE}>单件含量</th>
+                <th className={TH_BASE}>单位</th>
+                <th className={TH_BASE}>数量</th>
                 {config.dims.map((dim) => (
-                  <th key={dim.id} className="px-3 py-3 font-medium">
+                  <th key={dim.id} className={TH_BASE}>
                     {dim.label}
-                    {dim.unit && <span className="text-sm text-slate-500 ml-1">({dim.unit})</span>}
+                    {dim.unit && <span className="text-xs text-slate-400 ml-1">({dim.unit})</span>}
                   </th>
                 ))}
-                <th className="px-3 py-3 font-medium text-right">总量</th>
-                <th className="px-3 py-3 font-medium text-right">每单位价</th>
-                <th className="px-3 py-3 font-medium w-10" />
+                <th className={`${TH_BASE} text-right`}>总量</th>
+                <th className={`${TH_BASE} text-right`}>每单位价</th>
+                <th className={`${TH_BASE} w-10`} />
               </tr>
             </thead>
             {/* key 随 groupBy 变化，切换分组维度时整体重挂载，避免旧分组行残留 */}
@@ -858,6 +987,52 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           </table>
         </div>
 
+        {/* 移动端：卡片式录入（与表格共用分组折叠状态） */}
+        <div className="sm:hidden px-3 py-3 space-y-2">
+          {(groupBy ? groupSkus(skus, groupBy) : [{ key: '__all__', items: skus }]).map((group) => {
+            const isGrouped = groupBy !== null
+            const isCollapsed = collapsed.has(group.key)
+            return (
+              <div key={group.key} className="space-y-2">
+                {isGrouped && (
+                  <button
+                    onClick={() => toggleGroup(group.key)}
+                    className="w-full flex items-center gap-2 rounded-lg bg-brand-soft/60 px-3 py-2 text-xs font-semibold text-slate-600 select-none"
+                  >
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 text-brand transition-transform duration-200 ${
+                        isCollapsed ? '-rotate-90' : ''
+                      }`}
+                    />
+                    <span className="text-brand">{group.key}</span>
+                    <span className="text-slate-500 font-normal">（{group.items.length} 个规格）</span>
+                  </button>
+                )}
+                {!isCollapsed &&
+                  group.items.map((s) => {
+                    const idx = skus.findIndex((x) => x.id === s.id)
+                    return (
+                      <SkuRowCard
+                        key={s.id}
+                        s={s}
+                        idx={idx}
+                        update={update}
+                        updateParam={updateParam}
+                        remove={remove}
+                        dims={config.dims}
+                        flavorLabel={flavorLabel}
+                        flavorColorMap={flavorColorMap}
+                        dimColorMaps={dimColorMaps}
+                        dimHasGroup={dimHasGroup}
+                        hasAnyFlavor={hasAnyFlavor}
+                      />
+                    )
+                  })}
+              </div>
+            )
+          })}
+        </div>
+
         {/* 表尾：添加行 */}
         <button
           onClick={add}
@@ -866,6 +1041,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <Plus className="h-4 w-4" /> 添加一行规格
         </button>
       </div>
+      )}
 
       {/* 底部生成 */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass rounded-2xl p-5">
@@ -974,82 +1150,7 @@ interface RowFieldsProps {
 }
 
 function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: RowFieldsProps) {
-  const total = s.quantity * Math.max(1, s.packs)
-  const up = total > 0 && s.price > 0 ? s.price / total : 0
-  const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
-  const { flavor, spec } = parseFlavor(s.name)
-
-  const setName = (newFlavor: string, newSpec: string) => {
-    const name = newFlavor.trim() ? `${newFlavor.trim()} ${newSpec.trim()}`.trim() : newSpec.trim()
-    update(s.id, { name })
-  }
-
-  /** 改规格描述 → 同步解析 含量/单位/数量/件数量词 */
-  const handleSpec = (newSpec: string) => {
-    const parts = parseSpec(newSpec)
-    const patch: Partial<Sku> = {}
-    if (parts.quantity !== undefined) patch.quantity = parts.quantity
-    if (parts.unit) patch.unit = parts.unit
-    if (parts.packs !== undefined) patch.packs = parts.packs
-    // 量词跟随描述重建：写了"瓶"存"瓶"，没写量词清空（buildSpec 回退默认）
-    if (parts.packs !== undefined) patch.packUnit = parts.packUnit ?? ''
-    const name = flavor.trim() ? `${flavor.trim()} ${newSpec.trim()}`.trim() : newSpec.trim()
-    update(s.id, { ...patch, name })
-  }
-
-  /** 改 含量/单位/数量 → 同步重建规格描述 */
-  const handleField = (field: 'quantity' | 'unit' | 'packs', value: number | string) => {
-    const next = { ...s, [field]: value }
-    const spec = buildSpec(next.quantity, next.unit, next.packs, next.packUnit)
-    const name = flavor.trim() ? `${flavor.trim()} ${spec}`.trim() : spec
-    update(s.id, { [field]: value, name })
-  }
-
-  /** 渲染某个维度对应的输入控件 */
-  const renderDimInput = (dim: ParamDim) => {
-    const raw = s.params?.[dim.id]
-    if (dim.type === 'boolean') {
-      const boolValue = typeof raw === 'string' ? raw : (typeof raw === 'boolean' && raw ? 'yes' : 'no')
-      return (
-        <select
-          value={boolValue}
-          onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
-          className="field py-1.5 text-xs min-w-[80px]"
-        >
-          <option value="no">否</option>
-          <option value="yes">是</option>
-        </select>
-      )
-    }
-    if (dim.type === 'text') {
-      const levels = dim.levels ?? []
-      return (
-        <select
-          value={typeof raw === 'string' ? raw : ''}
-          onChange={(e) => updateParam(s.id, dim.id, e.target.value)}
-          className="field py-1.5 text-xs min-w-[88px]"
-        >
-          <option value="">—</option>
-          {levels.map((lv) => (
-            <option key={lv} value={lv}>{lv}</option>
-          ))}
-        </select>
-      )
-    }
-    // 数值型：higher-better / lower-better
-    return (
-      <AutoWidthInput
-        type="number"
-        value={typeof raw === 'number' ? raw : ''}
-        onChange={(e) =>
-          updateParam(s.id, dim.id, e.target.value === '' ? undefined : parseFloat(e.target.value))
-        }
-        placeholder={dim.unit ?? '0'}
-        minWidth={56} extra={24}
-        className="field py-1.5 text-xs tabular"
-      />
-    )
-  }
+  const { total, up, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
 
   // 同口味行用同底色，仅多口味时上色；待补充行保留警告色
   const flavorBg = !incomplete && hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
@@ -1137,7 +1238,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
             className="px-3 py-2"
             style={barColor ? { borderLeft: `3px solid ${barColor}` } : undefined}
           >
-            {renderDimInput(dim)}
+            <DimInput dim={dim} s={s} updateParam={updateParam} />
           </td>
         )
       })}
@@ -1160,5 +1261,198 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         </button>
       </td>
     </motion.tr>
+  )
+}
+
+/* ============ 移动端：单行卡片式录入（与桌面 RowFields 共用 useSkuRow / DimInput） ============ */
+
+interface SkuRowCardProps {
+  s: Sku
+  idx: number
+  update: (id: string, patch: Partial<Sku>) => void
+  updateParam: (id: string, dimId: string, value: ParamValue) => void
+  remove: (id: string) => void
+  dims: ParamDim[]
+  flavorLabel: string
+  flavorColorMap: Map<string, string>
+  dimColorMaps: Map<string, string>[]
+  dimHasGroup: boolean[]
+  hasAnyFlavor: boolean
+}
+
+function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: SkuRowCardProps) {
+  const { total, up, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
+  const flavorBg = !incomplete && hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
+
+  return (
+    <motion.div
+      layout
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+      className={`rounded-xl border p-3 space-y-2.5 ${
+        incomplete ? 'border-amber-400/40 bg-amber-400/[0.03]' : 'border-edge bg-panel/60'
+      } ${flavorBg}`}
+    >
+      {/* 首行：序号 + 口味 + 规格 + 删除 */}
+      <div className="flex items-center gap-2">
+        <span className="text-slate-400 font-mono text-xs shrink-0">{String(idx + 1).padStart(2, '0')}</span>
+        <input
+          value={flavor}
+          onChange={(e) => setName(e.target.value, spec)}
+          placeholder={flavorLabel}
+          className="field py-1.5 text-xs flex-1 min-w-0"
+        />
+        <input
+          value={spec}
+          onChange={(e) => handleSpec(e.target.value)}
+          placeholder="如 16g×8袋"
+          title="改这里会同步 含量/单位/数量"
+          className="field py-1.5 text-xs font-medium flex-[1.3] min-w-0"
+        />
+        <button
+          onClick={() => remove(s.id)}
+          className="text-slate-400 hover:text-red-400 transition-colors shrink-0"
+          aria-label="删除此行"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* 数值区：总价 / 含量 / 单位 / 数量 */}
+      <div className="grid grid-cols-4 gap-2">
+        <label className="block min-w-0">
+          <span className="text-[10px] text-slate-400 mb-0.5 block">总价 ¥</span>
+          <input
+            type="number" min={0} step="0.01" value={s.price || ''}
+            onChange={(e) => update(s.id, { price: parseFloat(e.target.value) || 0 })}
+            placeholder="4.94"
+            className="field py-1.5 text-xs tabular"
+          />
+        </label>
+        <label className="block min-w-0">
+          <span className="text-[10px] text-slate-400 mb-0.5 block">单件含量</span>
+          <input
+            type="number" min={0} value={s.quantity || ''}
+            onChange={(e) => handleField('quantity', parseFloat(e.target.value) || 0)}
+            placeholder="16"
+            title="改这里会同步规格描述"
+            className="field py-1.5 text-xs tabular"
+          />
+        </label>
+        <label className="block min-w-0">
+          <span className="text-[10px] text-slate-400 mb-0.5 block">单位</span>
+          <input
+            value={s.unit}
+            onChange={(e) => handleField('unit', e.target.value)}
+            placeholder="g"
+            className="field py-1.5 text-xs"
+          />
+        </label>
+        <label className="block min-w-0">
+          <span className="text-[10px] text-slate-400 mb-0.5 block">数量</span>
+          <input
+            type="number" min={1} value={s.packs || ''}
+            onChange={(e) => handleField('packs', parseInt(e.target.value) || 1)}
+            placeholder="8"
+            title="改这里会同步规格描述"
+            className="field py-1.5 text-xs tabular"
+          />
+        </label>
+      </div>
+
+      {/* 参数维度：有分组时带左侧色条 */}
+      {dims.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-2">
+          {dims.map((dim, dIdx) => {
+            const v = String(s.params?.[dim.id] ?? '')
+            const barColor = dimHasGroup[dIdx] ? dimColorMaps[dIdx].get(v) : undefined
+            return (
+              <div
+                key={dim.id}
+                className="min-w-0"
+                style={barColor ? { borderLeft: `3px solid ${barColor}`, paddingLeft: 8 } : undefined}
+              >
+                <span className="text-[10px] text-slate-400 mb-0.5 block">
+                  {dim.label}{dim.unit ? `(${dim.unit})` : ''}
+                </span>
+                <DimInput dim={dim} s={s} updateParam={updateParam} />
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 底栏：总量 + 每单位价 */}
+      <div className="flex items-center justify-between text-xs pt-2 border-t border-edge/50">
+        <span className="text-slate-400 tabular">
+          {total > 0 ? `总量 ${fmt.num(total)}${s.unit}` : '总量 —'}
+        </span>
+        <span className={`font-semibold tabular ${up > 0 ? 'text-brand' : 'text-slate-400'}`}>
+          {up > 0 ? `${fmt.price4(up)}/${s.unit}` : '待补充'}
+        </span>
+      </div>
+    </motion.div>
+  )
+}
+
+/* ============ 空状态：首次进入的快速入门 ============ */
+
+function EmptyState({ genLoading, onGenExample, onPickImage, onAdd }: {
+  genLoading: boolean
+  onGenExample: () => void
+  onPickImage: () => void
+  onAdd: () => void
+}) {
+  const cardCls =
+    'group rounded-2xl border border-edge bg-panel/60 p-5 text-left hover:border-brand/50 hover:shadow-glow hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-wait disabled:hover:translate-y-0'
+  const iconCls = 'mb-3 h-10 w-10 rounded-xl grid place-items-center'
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="glass rounded-2xl px-5 py-12 sm:py-16"
+    >
+      <div className="max-w-2xl mx-auto text-center">
+        <div className="mx-auto mb-5 h-14 w-14 rounded-2xl bg-brand-soft grid place-items-center shadow-soft">
+          <Scale className="h-7 w-7 text-brand" />
+        </div>
+        <h3 className="text-lg sm:text-xl font-bold tracking-tight">从任意一种方式开始</h3>
+        <p className="mt-1.5 text-xs sm:text-sm text-slate-500">
+          填写、截图或粘贴，30 秒搭好一个比价清单
+        </p>
+        <div className="mt-8 grid sm:grid-cols-3 gap-3 text-left">
+          <button onClick={onGenExample} disabled={genLoading} className={cardCls}>
+            <div className={`${iconCls} bg-violet-500/15`}>
+              {genLoading
+                ? <Loader2 className="h-5 w-5 text-violet-500 animate-spin" />
+                : <Sparkles className="h-5 w-5 text-violet-500" />}
+            </div>
+            <div className="text-sm font-semibold">{genLoading ? '生成中…' : 'AI 生成示例'}</div>
+            <div className="text-xs text-slate-400 mt-0.5">先看看完整效果</div>
+          </button>
+          <button onClick={onPickImage} className={cardCls}>
+            <div className={`${iconCls} bg-brand/10`}>
+              <ImagePlus className="h-5 w-5 text-brand" />
+            </div>
+            <div className="text-sm font-semibold">AI 截图识别</div>
+            <div className="text-xs text-slate-400 mt-0.5">商品页截图自动提取</div>
+          </button>
+          <button onClick={onAdd} className={cardCls}>
+            <div className={`${iconCls} bg-emerald-500/15`}>
+              <Plus className="h-5 w-5 text-emerald-500" />
+            </div>
+            <div className="text-sm font-semibold">手动添加</div>
+            <div className="text-xs text-slate-400 mt-0.5">逐行填写规格价格</div>
+          </button>
+        </div>
+        <p className="mt-5 text-xs text-slate-400 flex items-center justify-center gap-1.5 flex-wrap">
+          <UploadCloud className="h-3.5 w-3.5 text-brand/70" />
+          也可以把截图拖到页面任意位置，或按
+          <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-[11px] font-mono">Ctrl+V</kbd>
+          粘贴截图 / Excel 表格
+        </p>
+      </div>
+    </motion.div>
   )
 }

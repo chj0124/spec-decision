@@ -6,7 +6,7 @@ import {
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
   Printer, Copy, Check, Radar as RadarIcon,
 } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, animate } from 'framer-motion'
 import { useChartTheme } from '../lib/useChartTheme'
 import {
   BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -40,6 +40,25 @@ const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; r
 }
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6
+
+/** 数字滚动递增：冠军卡核心指标挂载时从 0 滚动到目标值（尊重"减少动态效果"系统偏好） */
+function CountUp({ value, format, className }: { value: number; format: (n: number) => string; className?: string }) {
+  const [text, setText] = useState(() => format(value))
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setText(format(value))
+      return
+    }
+    const controls = animate(0, value, {
+      duration: 0.7,
+      ease: [0.16, 1, 0.3, 1],
+      onUpdate: (v) => setText(format(v)),
+    })
+    return () => controls.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+  return <span className={className}>{text}</span>
+}
 
 /** 雷达图/图例用的系列短名：优先「口味·规格」，超长截断 */
 function shortLabel(it: ComputedSku): string {
@@ -283,7 +302,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
         {/* 决策偏好切换 */}
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-slate-500">决策偏好：</span>
+          <span className="text-xs text-slate-500">决策偏好：</span>
           <div className="flex rounded-lg border border-edge overflow-hidden">
             {([
               { key: 'value', label: '性价比优先' },
@@ -305,7 +324,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
           {config.preference === 'budget' && (
             <div className="flex items-center gap-1.5">
-              <span className="text-sm text-slate-500">预算</span>
+              <span className="text-xs text-slate-500">预算</span>
               <input
                 type="number"
                 min={0}
@@ -351,21 +370,25 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
                     <div className="text-2xl font-bold text-brand tabular">
-                      {fmt.priceUnit(best.unitPrice)}
+                      <CountUp value={best.unitPrice} format={fmt.priceUnit} />
                     </div>
                   </div>
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">{best.packs > 1 ? '每包' : '每件'}价格</div>
-                    <div className="text-2xl font-bold tabular">{fmt.yuan(best.packPrice)}</div>
+                    <div className="text-2xl font-bold tabular">
+                      <CountUp value={best.packPrice} format={fmt.yuan} />
+                    </div>
                   </div>
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">综合得分</div>
-                    <div className="text-2xl font-bold tabular">{best.score.toFixed(1)}</div>
+                    <div className="text-2xl font-bold tabular">
+                      <CountUp value={best.score} format={(n) => n.toFixed(1)} />
+                    </div>
                   </div>
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">总价 / 总量</div>
                     <div className="text-2xl font-bold tabular">
-                      {fmt.yuan(best.price)}
+                      <CountUp value={best.price} format={fmt.yuan} />
                       <span className="text-sm text-slate-400 font-normal ml-2">
                         {fmt.num(best.totalQuantity)}{best.unit}
                       </span>
@@ -425,7 +448,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
           {view === 'cluster' && decisionUnits ? (
             <>
-              <p className="text-sm text-slate-500 -mt-1">
+              <p className="text-xs text-slate-500 -mt-1">
                 已把仅口味/颜色不同、价格结构一致的 {items.length} 个规格折叠为 {decisionUnits.length} 个决策项，
                 先比价格、再在卡片内挑口味
               </p>
@@ -936,17 +959,20 @@ function RankGroupRows({
         </tr>
       )}
 
-      {/* 数据行：折叠时隐藏，分组内排名按 allItems 中的位置 */}
+      {/* 数据行：折叠时隐藏，分组内排名按 allItems 中的位置；逐行错峰淡入 */}
       {!isCollapsed &&
-        groupItems.map((item) => {
+        groupItems.map((item, rowIdx) => {
           // 用全局排名（item.rank 已按得分排序），前三名用奖牌图标
           const idx = allItems.findIndex((x) => x.id === item.id)
           const RankIcon = RANK_ICON[idx]
           const { flavor } = parseFlavor(item.name)
           const flavorBg = flavor ? flavorColorMap.get(flavor) ?? '' : ''
           return (
-            <tr
+            <motion.tr
               key={item.id}
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.2, delay: Math.min(rowIdx * 0.04, 0.3) }}
               className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${
                 item.isBest ? 'bg-brand/5' : ''
               } ${flavorBg && !item.isBest ? flavorBg : ''}`}
@@ -974,7 +1000,7 @@ function RankGroupRows({
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
               <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(item.unitPrice)}</td>
               <td className="px-2 py-2.5 text-right tabular text-slate-500 dark:text-slate-300">{fmt.yuan(item.packPrice)}</td>
-            </tr>
+            </motion.tr>
           )
         })}
     </>
