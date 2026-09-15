@@ -25,6 +25,15 @@ export { parseFlavor, groupSkus, parseSpec, buildSpec } from './spec'
 export type { GroupBy, SpecParts } from './spec'
 
 export {
+  MAX_PRICE_POINTS,
+  recordPrice,
+  sanitizePriceHistory,
+  priceTrend,
+  fmtPointDay,
+} from './history'
+export type { PriceTrend } from './history'
+
+export {
   computeSku,
   scoreItems,
   marginAnalysis,

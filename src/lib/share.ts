@@ -86,7 +86,14 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array | null> {
 
 /** 编码为可放进 URL hash 的紧凑 token */
 export async function encodeShare(data: ShareData): Promise<string> {
-  const json = JSON.stringify({ v: 1, skus: data.skus, config: data.config })
+  // 价格历史只是本机录入痕迹，不影响决策结论；分享时剥掉，
+  // 免得几十条时间戳把 URL 撑爆（分享链接本就有长度软上限）。
+  const skus = data.skus.map((s) => {
+    const rest: Sku = { ...s }
+    delete rest.priceHistory
+    return rest
+  })
+  const json = JSON.stringify({ v: 1, skus, config: data.config })
   const raw = new TextEncoder().encode(json)
   const packed = await deflate(raw)
   if (packed) return PREFIX_DEFLATE + bytesToBase64Url(packed)

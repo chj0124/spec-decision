@@ -17,6 +17,12 @@ export interface ParamDim {
 /** 单个 SKU 某维度的取值 */
 export type ParamValue = number | string | undefined
 
+/** 一次价格记录：某时刻该规格的总价（元） */
+export interface PricePoint {
+  t: number
+  price: number
+}
+
 export interface Sku {
   id: string
   name: string
@@ -32,6 +38,8 @@ export interface Sku {
   bonusWeight?: number
   /** 新：多维参数取值，key = ParamDim.id */
   params?: Record<string, ParamValue>
+  /** 价格历史：历次录入的总价（同日合并、条数有上限），用于提示涨价/降价 */
+  priceHistory?: PricePoint[]
 }
 
 export interface ComputedSku extends Sku {

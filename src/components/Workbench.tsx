@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
-import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS } from '../lib/engine'
+import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint } from '../lib/types'
+import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
@@ -13,6 +13,7 @@ import {
   Plus, Trash2, ImagePlus, Loader2,
   Sparkles, ArrowRight, UploadCloud, ChevronDown,
   Sliders, PieChart as PieIcon, X, AlertCircle, Scale,
+  TrendingUp, TrendingDown, Minus,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -155,6 +156,32 @@ const emptySku = (): Sku => ({
   id: uid(), name: '', price: 0, quantity: 0, unit: 'g', packs: 1,
 })
 
+/**
+ * 价格走势徽标：只有录到 ≥2 个价格点（跨天变过价）才出现，hover 可看历史明细。
+ * 降价用绿色（对买家是好消息），涨价用琥珀色 —— 与报告里的涨跌语义保持一致。
+ */
+function PriceTrendBadge({ history, className = '' }: { history?: PricePoint[]; className?: string }) {
+  const trend = priceTrend(history)
+  if (!trend) return null
+  const { direction, deltaPct, points } = trend
+  const flat = direction === 'flat'
+  const down = direction === 'down'
+  const Icon = flat ? Minus : down ? TrendingDown : TrendingUp
+  const tone = flat ? 'text-slate-400' : down ? 'text-emerald-500' : 'text-amber-500'
+  const label = flat ? '持平' : `${down ? '降' : '涨'}${Math.abs(deltaPct).toFixed(1)}%`
+  const detail = points.map((p) => `${fmtPointDay(p.t)} ${fmt.yuan(p.price)}`).join(' → ')
+  return (
+    <span
+      title={`价格历史（${points.length} 条）：${detail}`}
+      aria-label={`价格${label}`}
+      className={`inline-flex items-center gap-0.5 shrink-0 text-[10px] tabular whitespace-nowrap ${tone} ${className}`}
+    >
+      <Icon className="h-3 w-3 shrink-0" />
+      {label}
+    </span>
+  )
+}
+
 // 权重饼图调色板（与图表主题一致的靛蓝主色系）
 const PIE_COLORS = ['#4f46e5', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#0ea5e9', '#ec4899']
 
@@ -220,7 +247,14 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     })
 
   const update = (id: string, patch: Partial<Sku>) =>
-    onChange(skus.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+    onChange(skus.map((s) => {
+      if (s.id !== id) return s
+      const next = { ...s, ...patch }
+      // 改总价时顺带记一条价格历史（同日覆盖、条数上限，见 recordPrice）。
+      // 放在这里而不是各个 onChange 里，是为了让桌面表格行 / 移动卡片 / 未来任何入口都自动记账。
+      if (patch.price !== undefined) next.priceHistory = recordPrice(s.priceHistory, patch.price)
+      return next
+    }))
 
   /** 更新某个 SKU 的某个 param 维度值 */
   const updateParam = (id: string, dimId: string, value: ParamValue) =>
@@ -1172,12 +1206,15 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         />
       </td>
       <td className="px-3 py-2">
-        <AutoWidthInput
-          type="number" min={0} step="0.01" value={s.price || ''}
-          onChange={(e) => update(s.id, { price: parseFloat(e.target.value) || 0 })}
-          placeholder="4.94" minWidth={64} extra={24}
-          className="field py-1.5 text-xs tabular"
-        />
+        <div className="flex items-center gap-1.5">
+          <AutoWidthInput
+            type="number" min={0} step="0.01" value={s.price || ''}
+            onChange={(e) => update(s.id, { price: parseFloat(e.target.value) || 0 })}
+            placeholder="4.94" minWidth={64} extra={24}
+            className="field py-1.5 text-xs tabular"
+          />
+          <PriceTrendBadge history={s.priceHistory} />
+        </div>
       </td>
       <td className="px-3 py-2">
         <AutoWidthInput
@@ -1303,7 +1340,10 @@ function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, fl
       {/* 数值区：总价 / 含量 / 单位 / 数量 */}
       <div className="grid grid-cols-4 gap-2">
         <label className="block min-w-0">
-          <span className="text-[10px] text-slate-400 mb-0.5 block">总价 ¥</span>
+          <span className="text-[10px] text-slate-400 mb-0.5 flex items-center gap-1">
+            总价 ¥
+            <PriceTrendBadge history={s.priceHistory} />
+          </span>
           <input
             type="number" min={0} step="0.01" value={s.price || ''}
             onChange={(e) => update(s.id, { price: parseFloat(e.target.value) || 0 })}

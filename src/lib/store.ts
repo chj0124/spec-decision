@@ -1,5 +1,5 @@
 import type { Sku, Theme, DecisionConfig, ParamDim } from './types'
-import { uid } from './engine'
+import { uid, sanitizePriceHistory } from './engine'
 
 const SKU_KEY = 'spec-decision:skus'
 const THEME_KEY = 'spec-decision:theme'
@@ -143,9 +143,31 @@ function migrateToWorkspace(): Workspace {
     legacySkus,
     legacyConfig,
   )
-  const ws: Workspace = { scenarios: [scenario], activeId: scenario.id }
+  // 过一遍清洗：顺带把老数据的价格历史播种补上（见 sanitizeSkus）
+  const scenarios = sanitizeScenarios([scenario])
+  const ws: Workspace = { scenarios, activeId: scenarios[0].id }
   saveWorkspace(ws)
   return ws
+}
+
+/**
+ * 清洗 SKU 列表，并补全价格历史（price-history 迁移）：
+ *  - 丢弃没有 id 的残项
+ *  - 历史点非法则清洗（见 sanitizePriceHistory）
+ *  - 老数据没有历史但有价格时，用当前价格播下第一个点 ——
+ *    这样后续改价才有比较基准，能提示涨价/降价
+ */
+function sanitizeSkus(input: unknown): Sku[] {
+  if (!Array.isArray(input)) return []
+  const now = Date.now()
+  return (input as Array<Partial<Sku>>)
+    .filter((s): s is Sku => Boolean(s && s.id))
+    .map((s) => {
+      const history = sanitizePriceHistory(s.priceHistory)
+      const price = Number(s.price)
+      const seeded = history.length > 0 || !(price > 0) ? history : [{ t: now, price }]
+      return { ...s, priceHistory: seeded }
+    })
 }
 
 /**
@@ -159,6 +181,7 @@ function sanitizeScenarios(input: unknown): Scenario[] {
     .map((s) => ({
       ...s,
       name: s.name || '未命名清单',
+      skus: sanitizeSkus(s.skus),
       config: { ...DEFAULT_CONFIG, ...s.config, dims: Array.isArray(s.config.dims) ? s.config.dims : [] },
       updatedAt: s.updatedAt ?? Date.now(),
     }))
