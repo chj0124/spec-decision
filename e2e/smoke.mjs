@@ -1,5 +1,5 @@
-// 端到端冒烟：真浏览器跑通「启动 → 生成示例 → 出报告」主链路，并守住几条易回归的约束
-// （首屏不预载 charts chunk、PWA manifest、备份入口、主题切换、移动端无横向溢出）。
+// 端到端冒烟：真浏览器跑通「启动 → 生成示例 → 出报告 → 导出 PNG」主链路，并守住几条易回归的约束
+// （首屏不预载 charts / html-to-image chunk、PWA manifest、备份入口、主题切换、移动端无横向溢出）。
 //
 // 用法：npm run e2e        （会先 npm run build，再起 vite preview，跑完自动关闭）
 //
@@ -7,7 +7,7 @@
 // 断言与服务器管理，不引入新的依赖，也不需要框架配置。
 
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -64,6 +64,18 @@ async function waitForServer(host, port, timeoutMs) {
 }
 
 /* ---------------- 用例 ---------------- */
+
+/**
+ * 从 PNG 的 IHDR 数据块里读出宽高（不引依赖，手解 24 字节头即可）。
+ * 只比对文件大小挡不住"纯色空白图"——那种图也能有一两 MB，
+ * 但整份报告栅格化出来必然又宽又高，用尺寸当护栏更靠谱。
+ */
+function readPngSize(file) {
+  const buf = readFileSync(file)
+  const isPng = buf.length > 24 && buf.toString('latin1', 1, 4) === 'PNG'
+  if (!isPng) return null
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+}
 
 async function runSmoke(browser, name, viewport) {
   const context = await browser.newContext({ viewport })
@@ -129,6 +141,27 @@ async function runSmoke(browser, name, viewport) {
     // 报告页懒加载 chunk 到位后才会出现分享按钮
     await page.getByRole('button', { name: /分享链接|生成中/ }).waitFor({ timeout: STEP_TIMEOUT_MS })
     check(`[${name}] 报告页懒加载并渲染成功`, true)
+
+    /* --- 报告导出 PNG（P2-4）：真下载一张图片，验完即弃 --- */
+    const downloadPromise = page.waitForEvent('download', { timeout: STEP_TIMEOUT_MS })
+    await page.getByRole('button', { name: '导出 PNG', exact: true }).click()
+    const download = await downloadPromise
+    const exportFile = path.join(tmpdir(), `e2e-${name}-export.png`)
+    await download.saveAs(exportFile)
+    const exportName = download.suggestedFilename()
+    const exportBytes = statSync(exportFile).size
+    const exportPng = readPngSize(exportFile)
+    // 阈值取"视口无关"的宽松下界：这里只用来挡空白图 / 半截图，
+    // 不做精确几何比对（桌面 2464×5770、手机 716×8226 都应过关）。
+    check(
+      `[${name}] 报告导出 PNG 成功`,
+      exportName.endsWith('.png') &&
+        exportBytes > 5000 &&
+        !!exportPng &&
+        exportPng.width >= 600 &&
+        exportPng.height >= 1500,
+      `${exportName} · ${exportPng?.width ?? '?'}×${exportPng?.height ?? '?'} · ${exportBytes}B`,
+    )
 
     /* --- 主题切换 --- */
     const before = await page.getAttribute('html', 'class')

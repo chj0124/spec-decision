@@ -65,6 +65,9 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined
           if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-vendor')) return 'charts'
           if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) return 'motion'
+          // 报告导出 PNG 用的 html-to-image 只在点按钮时动态 import，
+          // 单独成块，否则会被并进常驻 vendor 变成首屏加载
+          if (id.includes('html-to-image')) return 'html-to-image'
           return 'vendor'
         },
       },

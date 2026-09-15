@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel } from '../lib/engine'
+import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay } from '../lib/engine'
 import {
-  Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
+  Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
-  Printer, Copy, Check, Radar as RadarIcon, Share2,
+  Printer, Copy, Check, Radar as RadarIcon, Share2, Minus, ImageDown, Loader2,
 } from 'lucide-react'
 import { motion, AnimatePresence, animate } from 'framer-motion'
 import { useChartTheme } from '../lib/useChartTheme'
+import { exportNodeToPng, buildReportFileName, EXPORT_BG } from '../lib/exportImage'
 import {
   Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ComposedChart, Line,
@@ -165,6 +166,31 @@ function groupComputedSkus(
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
+  // 冠军规格的价格走势：跨天变过价（≥2 条记录）时才有，用于提示"现在买是不是比上次贵"
+  const bestTrend = priceTrend(best?.priceHistory)
+  const TrendIcon = bestTrend?.direction === 'up' ? TrendingUp : bestTrend?.direction === 'down' ? TrendingDown : Minus
+
+  // 导出整份报告为 PNG：依赖 html-to-image，按需动态加载（见 lib/exportImage）
+  const reportRef = useRef<HTMLDivElement>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
+  const exportPng = async () => {
+    const node = reportRef.current
+    if (!node || exporting) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const dark = document.documentElement.classList.contains('dark')
+      await exportNodeToPng(node, {
+        fileName: `${buildReportFileName(config.category)}.png`,
+        background: dark ? EXPORT_BG.dark : EXPORT_BG.light,
+      })
+    } catch {
+      setExportError('导出图片失败，可改用「打印 / PDF」另存为 PDF 或图片。')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // 复制决策摘要到剪贴板（2 秒后恢复按钮文案）
   const [copied, setCopied] = useState(false)
@@ -313,7 +339,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   })()
 
   return (
-    <div className="space-y-8">
+    <div ref={reportRef} className="space-y-8">
       {/* 返回 + 导出 + 决策偏好 */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
@@ -324,7 +350,17 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <ArrowLeft className="h-4 w-4" /> 返回编辑
           </button>
           <span className="text-edge">|</span>
-          {/* 导出：打印为 PDF（浏览器打印对话框，配合打印样式）+ 复制纯文本摘要 */}
+          {/* 导出：PNG 图片（整页栅格化）+ 打印为 PDF（浏览器打印对话框，配合打印样式）+ 复制纯文本摘要 */}
+          <button
+            onClick={exportPng}
+            disabled={exporting}
+            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print disabled:opacity-60"
+            title="把整份报告导出成一张 PNG 图片，适合直接发到聊天工具 / 存图留档"
+          >
+            {exporting
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> 生成中…</>
+              : <><ImageDown className="h-4 w-4" /> 导出 PNG</>}
+          </button>
           <button
             onClick={() => window.print()}
             className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
@@ -419,6 +455,19 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </div>
       )}
 
+      {exportError && (
+        <div className="rounded-2xl border border-amber-400/40 bg-amber-500/5 px-4 py-3 flex items-center gap-3 text-xs text-amber-600 dark:text-amber-400 no-print">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span className="flex-1">{exportError}</span>
+          <button
+            onClick={() => setExportError(null)}
+            className="px-3 py-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand-deep hover:border-brand/50 transition-all shrink-0"
+          >
+            知道了
+          </button>
+        </div>
+      )}
+
       {/* 单位混杂警告 */}
       {unitWarning && (
         <div className="flex gap-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4">
@@ -474,6 +523,30 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     </div>
                   </div>
                 </div>
+
+                {/* 价格走势：仅当该规格留下过 ≥2 次价格记录时出现 */}
+                {bestTrend && (
+                  <div
+                    className={`mt-4 inline-flex items-start gap-1.5 rounded-xl border px-3 py-1.5 text-xs leading-relaxed ${
+                      bestTrend.direction === 'down'
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        : bestTrend.direction === 'up'
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          : 'border-edge bg-panel/60 text-slate-500'
+                    }`}
+                  >
+                    <TrendIcon className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      价格
+                      {bestTrend.direction === 'up' ? '上涨' : bestTrend.direction === 'down' ? '下降' : '持平'}
+                      {bestTrend.direction !== 'flat' && ` ${Math.abs(bestTrend.deltaPct).toFixed(1)}%`}
+                      ：{fmt.yuan(bestTrend.first)} → {fmt.yuan(bestTrend.last)}
+                      <span className="text-slate-400">
+                        （{bestTrend.points.length} 次记录 · {fmtPointDay(bestTrend.points[0].t)} 起）
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* 推荐理由 */}
