@@ -6,6 +6,7 @@ import type {
   ParamDim,
   ParamValue,
   Sku,
+  WarningPair,
 } from '../types'
 import { round, fmt, displayUnit, displayQuantity, displayUnitPrice } from './util'
 import { normalizeUnit } from './units'
@@ -250,21 +251,42 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
 
 /* ============ 提示与结论文案 ============ */
 
-/** 生成避坑提示 */
-export function buildWarnings(items: ComputedSku[]): string[] {
-  const tips: string[] = []
-  if (items.length < 2) return tips
+/**
+ * 生成避坑提示，并区分「能不能连成一条线」：
+ * - pairs：针对某两条规格的对比（智商税 / 加价不加量），带两条规格的 id，
+ *   报告页可在主视觉里把这两条横条用虚线连起来再挂文字；
+ * - notes：不针对某两条规格的提醒（过度囤货 / 差距不大），只能以文字呈现。
+ * 调用方要保证传入的 items 与图表所用的是同一份（同价同规格口味已合并），
+ * 否则 id 对不上，图上的连线会找不到横条。
+ */
+export function buildWarningsStructured(items: ComputedSku[]): {
+  pairs: WarningPair[]
+  notes: string[]
+} {
+  const pairs: WarningPair[] = []
+  const notes: string[] = []
+  if (items.length < 2) return { pairs, notes }
+  // 同一条"更贵 → 更便宜"的对照只留一次：两条规则（智商税 / 加价不加量）在小样本下
+  // 常常命中同一对规格，若都收录，图上会在同一处叠两条虚线和两个编号。
+  const seen = new Set<string>()
+  const push = (p: WarningPair) => {
+    const key = `${p.fromId}>${p.toId}`
+    if (seen.has(key)) return
+    seen.add(key)
+    pairs.push(p)
+  }
   const byPrice = [...items].sort((a, b) => a.unitPrice - b.unitPrice)
   const cheapest = byPrice[0]
   const priciest = byPrice[byPrice.length - 1]
 
   if (priciest.unitPrice > cheapest.unitPrice * 1.5) {
-    tips.push(
-      `「${priciest.name}」单价比「${cheapest.name}」贵 ${(
-        (priciest.unitPrice / cheapest.unitPrice - 1) *
-        100
-      ).toFixed(0)}%，除非有特殊需求，否则是明显的智商税。`,
-    )
+    const pct = Math.round((priciest.unitPrice / cheapest.unitPrice - 1) * 100)
+    push({
+      fromId: priciest.id,
+      toId: cheapest.id,
+      pct,
+      text: `「${priciest.name}」单价比「${cheapest.name}」贵 ${pct}%，除非有特殊需求，否则是明显的智商税。`,
+    })
   }
 
   // 检测「加价不加量」陷阱
@@ -273,9 +295,12 @@ export function buildWarnings(items: ComputedSku[]): string[] {
     const prev = byTotal[i - 1]
     const cur = byTotal[i]
     if (cur.price > prev.price && cur.unitPrice > prev.unitPrice) {
-      tips.push(
-        `「${cur.name}」比「${prev.name}」更贵且单位成本更高，属于「加价又加价率」的双重坑。`,
-      )
+      push({
+        fromId: cur.id,
+        toId: prev.id,
+        pct: Math.round((cur.unitPrice / prev.unitPrice - 1) * 100),
+        text: `「${cur.name}」比「${prev.name}」更贵且单位成本更高，属于「加价又加价率」的双重坑。`,
+      })
       break
     }
   }
@@ -284,15 +309,31 @@ export function buildWarnings(items: ComputedSku[]): string[] {
   const maxTotal = Math.max(...items.map((i) => i.totalQuantity))
   const avgTotal = items.reduce((s, i) => s + i.totalQuantity, 0) / items.length
   if (maxTotal > avgTotal * 2.5) {
-    tips.push(
+    notes.push(
       '最大规格的总量远超其他选项，若消耗速度慢，可能面临过期/闲置风险，囤货需量力而行。',
     )
   }
 
-  if (tips.length === 0) {
-    tips.push('各规格单价差距不大，按需购买即可，不必为了凑大包装多花钱。')
+  if (pairs.length === 0 && notes.length === 0) {
+    notes.push('各规格单价差距不大，按需购买即可，不必为了凑大包装多花钱。')
   }
-  return tips
+  return { pairs, notes }
+}
+
+/** 取「可连线」的那部分避坑提示（主视觉画虚线用） */
+export function buildWarningPairs(items: ComputedSku[]): WarningPair[] {
+  return buildWarningsStructured(items).pairs
+}
+
+/** 取「只能以文字呈现」的那部分避坑提示 */
+export function buildWarningNotes(items: ComputedSku[]): string[] {
+  return buildWarningsStructured(items).notes
+}
+
+/** 生成避坑提示（纯文本全量，供复制摘要等使用） */
+export function buildWarnings(items: ComputedSku[]): string[] {
+  const { pairs, notes } = buildWarningsStructured(items)
+  return [...pairs.map((p) => p.text), ...notes]
 }
 
 /** 推荐理由 */

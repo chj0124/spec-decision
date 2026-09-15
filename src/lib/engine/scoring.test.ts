@@ -5,6 +5,9 @@ import {
   marginAnalysis,
   mergeVariantSkus,
   buildWarnings,
+  buildWarningsStructured,
+  buildWarningPairs,
+  buildWarningNotes,
 } from './scoring'
 import { decide } from './decide'
 import { rankByPreference } from './clusters'
@@ -213,5 +216,58 @@ describe('buildWarnings 避坑提示', () => {
     const pricey = computeSku(sku({ id: 'p', name: '刺客', price: 50, quantity: 100, packs: 1 }))
     const tips = buildWarnings([cheap, pricey])
     expect(tips.join('')).toContain('刺客')
+  })
+})
+
+describe('buildWarningsStructured 结构化避坑提示', () => {
+  it('针对某两条规格的提示带 fromId/toId/pct，供图上连线', () => {
+    const cheap = computeSku(sku({ id: 'c', name: '白菜', price: 10, quantity: 100, packs: 1 }))
+    const pricey = computeSku(sku({ id: 'p', name: '刺客', price: 50, quantity: 100, packs: 1 }))
+    const { pairs, notes } = buildWarningsStructured([cheap, pricey])
+    expect(notes).toEqual([])
+    expect(pairs).toHaveLength(1)
+    expect(pairs[0]).toMatchObject({ fromId: 'p', toId: 'c', pct: 400 })
+    expect(pairs[0].text).toContain('刺客')
+    expect(pairs[0].text).toContain('白菜')
+  })
+
+  it('单价接近且无加价陷阱时退化为「只能以文字呈现」的 note', () => {
+    const a = computeSku(sku({ id: 'a', price: 10, quantity: 100, packs: 1 }))
+    const b = computeSku(sku({ id: 'b', price: 10, quantity: 100, packs: 1 }))
+    const { pairs, notes } = buildWarningsStructured([a, b])
+    expect(pairs).toEqual([])
+    expect(notes).toHaveLength(1)
+  })
+
+  it('两条规则命中同一对规格时只保留一条，避免图上叠线', () => {
+    const cheap = computeSku(sku({ id: 'c', price: 10, quantity: 100, packs: 1 }))
+    const pricey = computeSku(sku({ id: 'p', price: 50, quantity: 100, packs: 1 }))
+    const { pairs } = buildWarningsStructured([cheap, pricey])
+    expect(pairs).toHaveLength(1)
+  })
+
+  it('单条规格时不产生任何提示', () => {
+    const only = computeSku(sku())
+    expect(buildWarningPairs([only])).toEqual([])
+    expect(buildWarningNotes([only])).toEqual([])
+  })
+
+  it('纯文本 buildWarnings = pairs 文案 + notes', () => {
+    const cheap = computeSku(sku({ id: 'c', price: 10, quantity: 100, packs: 1 }))
+    const pricey = computeSku(sku({ id: 'p', price: 50, quantity: 100, packs: 1 }))
+    const { pairs, notes } = buildWarningsStructured([cheap, pricey])
+    expect(buildWarnings([cheap, pricey])).toEqual([...pairs.map((p) => p.text), ...notes])
+  })
+
+  it('decide 的 warningPairs 与图表所用（合并后）规格 id 对得上', () => {
+    const a = sku({ id: 'a', name: '原味 500g×2袋', price: 20, quantity: 500, packs: 2 })
+    const b = sku({ id: 'b', name: '巧克力 500g×2袋', price: 90, quantity: 500, packs: 2 })
+    const r = decide([a, b], cfg())
+    const chartIds = new Set(mergeVariantSkus(r.items).map((m) => m.id))
+    expect(r.warningPairs.length).toBeGreaterThan(0)
+    for (const p of r.warningPairs) {
+      expect(chartIds.has(p.fromId)).toBe(true)
+      expect(chartIds.has(p.toId)).toBe(true)
+    }
   })
 })

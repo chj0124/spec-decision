@@ -98,12 +98,32 @@ export interface SkuCluster {
   label: string // 簇标题，如 "16g × 8袋"
 }
 
+/**
+ * 可"成对连线"的避坑提示：报告页在主视觉里把被对照的两条规格横条用虚线连起来，
+ * 再把下面这段文字挂在同一个编号上，让"哪两个规格、差多少"直接落在图上。
+ * 只带字符串的话，图表就没法知道该连哪两条横条——和"预算排除只给计数"是同一类问题。
+ */
+export interface WarningPair {
+  /** 被对照的"更贵"一端（连线起点），对应 ComputedSku.id */
+  fromId: string
+  /** 作为基准的"更便宜"一端（连线终点），对应 ComputedSku.id */
+  toId: string
+  /** 更贵的一端贵出的百分比（357 = 贵 357%） */
+  pct: number
+  /** 完整说明文字（与编号一起展示在图上） */
+  text: string
+}
+
 export interface DecisionResult {
   items: ComputedSku[]
   best: ComputedSku | null
   baseline: ComputedSku | null // 单价最低者（用于性价比锚点）
   margins: MarginInsight[]
-  warnings: string[] // 避坑提示
+  warnings: string[] // 避坑提示（纯文本全量，摘要用）
+  /** 可连线到主视觉的避坑提示（带两条规格 id，供图表画虚线用） */
+  warningPairs: WarningPair[]
+  /** 无法连线（不针对某两条规格）的避坑提示，如"过度囤货""差距不大" */
+  warningNotes: string[]
   reasons: string[] // 推荐理由
   clusters: SkuCluster[] // 按定价因子聚合后的决策单元
   hasVariants: boolean // 是否存在"同定价多口味"的干扰维度

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, MarginInsight } from '../lib/types'
+import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, MarginInsight, WarningPair } from '../lib/types'
 import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
@@ -244,13 +244,15 @@ const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
  * 冠军条统一高亮，其余中性色。
  */
 function MainVisual({
-  kind, rows, unitLabel, anchorId, theme,
+  kind, rows, unitLabel, anchorId, theme, warningPairs,
 }: {
   kind: VisualKind
   rows: SpecRow[]
   unitLabel: string
   anchorId: string
   theme: ChartTheme
+  /** 需要连线对照的避坑提示（带两条规格 id），在主视觉里用虚线把两条横条连起来 */
+  warningPairs: WarningPair[]
 }) {
   const tooltipProps = {
     contentStyle: theme.tooltipStyle,
@@ -332,6 +334,15 @@ function MainVisual({
   const avg = data.reduce((s, r) => s + r[dataKey], 0) / Math.max(1, data.length)
   const chartHeight = Math.max(220, data.length * 40 + 60)
 
+  // 避坑连线：把被对照的两条规格横条用虚线连起来（从柱顶到柱顶），
+  // 中点挂一个编号徽标，和下方「避坑提示」里同号的那条说明一一对应。
+  // id 由引擎按"与图表相同口径"的合并规格集合生成，这里只做映射，对不上就不画。
+  const connectors = warningPairs.flatMap((p, i) => {
+    const from = data.find((r) => r.id === p.fromId)
+    const to = data.find((r) => r.id === p.toId)
+    return from && to ? [{ index: i, from, to }] : []
+  })
+
   return (
     <div style={{ height: chartHeight }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -354,6 +365,42 @@ function MainVisual({
           {kind === 'price' && (
             <ReferenceLine x={avg} stroke={theme.tick} strokeDasharray="4 4" label={{ value: '平均', position: 'top', fill: theme.tick, fontSize: 10 }} />
           )}
+          {/* 避坑对照：虚线连两条横条 + 线上编号徽标 */}
+          {connectors.map(({ index, from, to }) => (
+            <ReferenceLine
+              key={`warn-${index}`}
+              isFront
+              segment={[
+                { x: from[dataKey], y: from.name },
+                { x: to[dataKey], y: to.name },
+              ]}
+              stroke={theme.series.margin}
+              strokeWidth={1.6}
+              strokeDasharray="5 4"
+              label={(props: { viewBox?: { x: number; y: number; width: number; height: number } }) => {
+                const vb = props.viewBox
+                if (!vb) return <g />
+                const cx = vb.x + vb.width / 2
+                const cy = vb.y + vb.height / 2
+                return (
+                  <g>
+                    <circle cx={cx} cy={cy} r={9} fill={theme.series.margin} stroke={theme.label.stroke} strokeWidth={2} />
+                    <text
+                      x={cx}
+                      y={cy}
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill="#ffffff"
+                      fontSize={11}
+                      fontWeight={700}
+                    >
+                      {index + 1}
+                    </text>
+                  </g>
+                )
+              }}
+            />
+          ))}
           <Bar dataKey={dataKey} name={seriesName} radius={[0, 6, 6, 0]} maxBarSize={24}
             label={(props: { x?: number; y?: number; width?: number; height?: number; value?: number }) => {
               const { x, y, width, height, value } = props
@@ -491,7 +538,7 @@ function BudgetInput({
 }
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
-  const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
+  const { items, best, margins, warningPairs, warningNotes, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
   // 冠军规格的价格走势：跨天变过价（≥2 条记录）时才有，用于提示"现在买是不是比上次贵"
   const bestTrend = priceTrend(best?.priceHistory)
@@ -1035,6 +1082,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               unitLabel={visualUnit}
               anchorId={visualAnchorId}
               theme={chartTheme}
+              warningPairs={warningPairs}
             />
           </div>
 
@@ -1053,8 +1101,47 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 最划算点
               </span>
             )}
+            {visual !== 'quadrant' && warningPairs.length > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: chartTheme.series.margin }} />
+                避坑对照（编号见下）
+              </span>
+            )}
             <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
           </div>
+
+          {/* 避坑提示：并入主视觉，图上虚线 + 编号直接指向被对照的两条横条 */}
+          {(warningPairs.length > 0 || warningNotes.length > 0) && (
+            <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-4">
+              <h4 className="text-xs font-bold tracking-tight mb-3 flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-3.5 w-3.5" /> 避坑提示
+                {visual !== 'quadrant' && warningPairs.length > 0 && (
+                  <span className="font-normal text-amber-600/70 dark:text-amber-400/70">
+                    · 图上虚线标出了被对照的两条规格
+                  </span>
+                )}
+              </h4>
+              <ul className="space-y-2">
+                {warningPairs.map((p, i) => (
+                  <li key={`pair-${i}`} className="flex gap-2">
+                    <span
+                      className="shrink-0 mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                      style={{ background: chartTheme.series.margin }}
+                    >
+                      {i + 1}
+                    </span>
+                    <p className="text-xs text-slate-600 leading-relaxed">{p.text}</p>
+                  </li>
+                ))}
+                {warningNotes.map((n, i) => (
+                  <li key={`note-${i}`} className="flex gap-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-slate-600 leading-relaxed">{n}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </motion.section>
       )}
 
@@ -1155,24 +1242,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </section>
       )}
 
-      {/* ④ 避坑提示 */}
-      {warnings.length > 0 && (
-        <section className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-5">
-          <h3 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400" /> 避坑提示
-          </h3>
-          <ul className="space-y-2">
-            {warnings.map((w, i) => (
-              <li key={i} className="flex gap-2">
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {/* ⑤ 因超预算被排除：把"消失的选项"显式交代，避免用户以为数据没识别到 */}
+      {/* ④ 因超预算被排除：把"消失的选项"显式交代，避免用户以为数据没识别到 */}
       {config.preference === 'budget' && typeof config.budget === 'number' && result.budgetExcludedItems.length > 0 && (
         <section className="rounded-2xl border border-edge/60 bg-slate-500/5 p-5">
           <h3 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
@@ -1187,7 +1257,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </section>
       )}
 
-      {/* ⑥ 明细（默认收起）：完整排名表，支持簇化简 / 全量切换与分组折叠 */}
+      {/* ⑤ 明细（默认收起）：完整排名表，支持簇化简 / 全量切换与分组折叠 */}
       <section className="glass rounded-2xl p-6">
         <button
           onClick={() => setShowDetail((v) => !v)}

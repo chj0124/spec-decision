@@ -1,9 +1,10 @@
 import type { DecisionConfig, DecisionResult, Sku } from '../types'
 import {
   buildReasons,
-  buildWarnings,
+  buildWarningsStructured,
   computeSku,
   marginAnalysis,
+  mergeVariantSkus,
   scoreItems,
 } from './scoring'
 import { clusterItems, rankByPreference } from './clusters'
@@ -35,12 +36,19 @@ export function decide(skus: Sku[], config: DecisionConfig): DecisionResult {
   // 存在「同定价因子、多成员」的簇 → 说明有口味/颜色等干扰维度需要折叠
   const hasVariants = clusters.some((c) => c.members.length > 1)
 
+  // 避坑提示要落到主视觉的横条上，所以必须和图表用同一份规格集合（同价同规格已合并），
+  // 否则 pairs 里的 id 在图上找不到对应的横条，虚线就画不出来。
+  const chartItems = mergeVariantSkus(sorted)
+  const { pairs: warningPairs, notes: warningNotes } = buildWarningsStructured(chartItems)
+
   return {
     items: sorted,
     best,
     baseline,
     margins: marginAnalysis(sorted),
-    warnings: buildWarnings(sorted),
+    warnings: [...warningPairs.map((p) => p.text), ...warningNotes],
+    warningPairs,
+    warningNotes,
     reasons: best ? buildReasons(best, sorted) : [],
     clusters,
     hasVariants,
