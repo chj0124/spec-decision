@@ -687,19 +687,26 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <span className="panel-sub">VALUE MAP</span>
           </div>
           <p className="text-xs text-lo mb-5">
-            横轴总价 · 纵轴综合得分 · 越靠<em className="not-italic text-brand font-medium">左上角</em>越划算，
+            横轴{items[0]?.anchorHigherBetter ? '总价' : '每单位价'} · 纵轴综合得分 ·
+            越靠<em className="not-italic text-brand font-medium">左上角</em>越划算，
             右下角的点是"又贵又平庸"。{items[0]?.anchorHigherBetter ? '当前按每元性能计价。' : '当前按每单位量计价。'}
           </p>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart margin={{ top: 24, right: 24, bottom: 8, left: 8 }}>
+              {/* 横轴：per-unit 用每单位价（越低越好，冠军必在左上）；per-feature 用总价 */}
+              <ScatterChart
+                data={items.map((d) => ({ ...d, anchorX: d.anchorHigherBetter ? d.price : d.unitPrice }))}
+                margin={{ top: 24, right: 24, bottom: 8, left: 8 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
                 <XAxis
                   type="number"
-                  dataKey="price"
-                  name="总价"
+                  dataKey="anchorX"
+                  name={items[0]?.anchorHigherBetter ? '总价' : '每单位价'}
                   tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                  tickFormatter={(v) => `¥${v}`}
+                  tickFormatter={(v) =>
+                    items[0]?.anchorHigherBetter ? `¥${v}` : fmt.priceUnit(v)
+                  }
                   domain={['dataMin', 'dataMax']}
                 />
                 <YAxis
@@ -727,12 +734,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     )
                   }}
                 />
-                <Scatter data={items} isAnimationActive={false}>
+                <Scatter isAnimationActive={false}>
                   {items.map((d) => (
                     <Cell
                       key={d.id}
-                      fill={d.isBest ? '#16a34a' : chartTheme.series.unitPrice}
-                      fillOpacity={d.isBest ? 1 : 0.7}
+                      fill={d.isBest ? '#22D3EE' : chartTheme.series.unitPrice}
+                      fillOpacity={d.isBest ? 1 : 0.65}
                       r={d.isBest ? 8 : 5}
                     />
                   ))}
@@ -746,8 +753,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               </ScatterChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-3 text-xs text-slate-500 flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#16a34a]" /> 绿点为本期最划算
+          <p className="mt-3 text-xs text-lo flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#22D3EE]" /> 亮点为本期最划算
           </p>
         </section>
       )}

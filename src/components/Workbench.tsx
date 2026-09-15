@@ -624,8 +624,21 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
-  // KPI 状态带：当前最优单价（纯本地规则计算，不耗 AI）
+  // KPI 状态带：当前最优锚点（纯本地规则计算，不耗 AI）。
+  // per-feature 模式下"每单位价"退化成总价（计件=1），应改显示最优每元性能。
   const bestEntry = useMemo(() => {
+    if (config.mode === 'per-feature' && config.primaryDimId) {
+      let best: number | null = null
+      for (const s of skus) {
+        const pv = s.params?.[config.primaryDimId]
+        if (!(s.price > 0) || typeof pv !== 'number' || pv <= 0) continue
+        const fpy = pv / s.price
+        if (best === null || fpy > best) best = fpy
+      }
+      return best !== null
+        ? { label: '最优每元性能 BEST', text: fmt.num(best), suffix: '/元' }
+        : { label: '最优每元性能 BEST', text: '—', suffix: '' }
+    }
     let best: { up: number; unit: string } | null = null
     for (const s of skus) {
       if (!(s.price > 0 && s.quantity > 0 && s.packs > 0)) continue
@@ -636,7 +649,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       if (!best || up < best.up) best = { up, unit: norm.base || s.unit }
     }
     return best
-  }, [skus])
+      ? { label: '最优单价 BEST', text: fmt.price4(best.up), suffix: `/${best.unit}` }
+      : { label: '最优单价 BEST', text: '—', suffix: '' }
+  }, [skus, config.mode, config.primaryDimId])
 
   // 分组上色：第一维度（口味/颜色/型号）用行底色，参数维度列用左侧色条
   const flavorColorMap = new Map<string, string>()
@@ -705,14 +720,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             <div className="text-2xl font-bold tabular text-hi mt-0.5">{config.dims.length}</div>
           </div>
           <div>
-            <div className="panel-sub">最优单价 BEST</div>
+            <div className="panel-sub">{bestEntry.label}</div>
             <div className="text-2xl font-bold tabular text-pos mt-0.5">
-              {bestEntry ? (
-                <>
-                  {fmt.price4(bestEntry.up)}
-                  <span className="text-xs text-lo font-normal">/{bestEntry.unit}</span>
-                </>
-              ) : '—'}
+              {bestEntry.text}
+              {bestEntry.suffix && (
+                <span className="text-xs text-lo font-normal">{bestEntry.suffix}</span>
+              )}
             </div>
           </div>
           <div>
@@ -990,7 +1003,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       </AnimatePresence>
 
       {/* ============ 指挥舱面板网格：左 SKU 录入 / 右 维度与权重 ============ */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
 
       {/* ============ 参数维度 + 权重面板 ============ */}
       <div className="glass rounded-lg overflow-hidden lg:order-2 lg:sticky lg:top-20">
@@ -1020,9 +1033,10 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
               exit={{ height: 0, opacity: 0 }}
               className="overflow-hidden"
             >
-              <div className="flex flex-col lg:flex-row gap-4 p-4">
-                {/* 左：维度列表 */}
-                <div className="flex-1 space-y-2 min-w-0 overflow-x-auto">
+              {/* 面板在 lg 下是 380px 侧栏，内部始终纵向堆叠（不能再按大屏左右分栏） */}
+              <div className="flex flex-col gap-4 p-4">
+                {/* 上：维度列表 */}
+                <div className="space-y-2 min-w-0 overflow-x-auto">
                   {/* 计价模式：消耗品按单位量（每 g/ml），耐用品按每元性能（如手机比每元电池容量） */}
                   <div className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-edge/60 bg-panel/40">
                     <span className="text-xs font-semibold text-slate-600">计价模式</span>
@@ -1043,7 +1057,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                           title={opt.key === 'per-unit'
                             ? '消耗品（饮料/零食/纸巾）：比每 g/ml/个 多少钱'
                             : '耐用品（手机/家电）：比每元钱买多少性能'}
-                          className={`px-2.5 py-1 font-medium transition-colors ${
+                          className={`px-2.5 py-1 font-medium transition-colors whitespace-nowrap shrink-0 ${
                             (config.mode ?? 'per-unit') === opt.key
                               ? 'bg-brand/15 text-brand'
                               : 'text-slate-400 hover:text-brand-deep'
@@ -1054,7 +1068,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       ))}
                     </div>
                     {config.mode === 'per-feature' && (
-                      <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <label className="flex items-center gap-1.5 text-xs text-slate-500 whitespace-nowrap">
                         主参数
                         <select
                           value={config.primaryDimId ?? ''}
@@ -1064,7 +1078,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                               primaryDimId: e.target.value || undefined,
                             })
                           }
-                          className="field py-1 text-xs min-w-[96px]"
+                          className="field w-auto py-1 text-xs min-w-[96px]"
                           title="每元性能 = 该维度值 ÷ 总价，如每元电池容量（mAh/元）"
                         >
                           <option value="">选择数值维度…</option>
@@ -1084,7 +1098,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   </div>
 
                   {/* 价格维度（内置，不可删除） */}
-                  <div className="flex items-center gap-2 p-2 rounded-lg bg-brand-soft/30 border border-edge">
+                  <div className="flex items-center gap-2 flex-wrap p-2 rounded-lg bg-brand-soft/30 border border-edge">
                     <span className="text-xs font-mono text-slate-500 w-6">价格</span>
                     <input
                       value={config.mode === 'per-feature' && config.primaryDimId ? '每元性能' : '每单位价格'}
@@ -1094,12 +1108,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                     <span className="text-xs text-slate-500 w-16 text-center">
                       {config.mode === 'per-feature' && config.primaryDimId ? '越大越好' : '越小越好'}
                     </span>
-                    <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
+                    <div className="flex items-center gap-0.5 flex-wrap rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                       {WEIGHT_TIERS.map((t) => (
                         <button
                           key={t.value}
                           onClick={() => onConfigChange({ ...config, priceWeight: t.value })}
-                          className={`px-2 py-1 text-sm rounded transition-all ${
+                          className={`px-2 py-1 text-sm rounded transition-all whitespace-nowrap shrink-0 ${
                             config.priceWeight === t.value
                               ? 'bg-brand/20 text-brand font-semibold'
                               : 'text-slate-500 hover:text-brand-deep'
@@ -1113,7 +1127,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
                   {/* 用户自定义维度 */}
                   {config.dims.map((dim) => (
-                    <div key={dim.id} className="flex items-center gap-2 p-2 rounded-lg border border-edge hover:bg-brand-soft/30 transition-colors">
+                    <div key={dim.id} className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-edge hover:bg-brand-soft/30 transition-colors">
                       <AutoWidthInput
                         value={dim.label}
                         onChange={(e) => updateDim(dim.id, { label: e.target.value })}
@@ -1134,7 +1148,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       <select
                         value={dim.type}
                         onChange={(e) => updateDim(dim.id, { type: e.target.value as ParamType })}
-                        className="field py-1.5 text-xs min-w-[96px]"
+                        className="field w-auto py-1.5 text-xs min-w-[96px]"
                         title="维度类型"
                       >
                         {Object.entries(PARAM_TYPE_LABELS).map(([v, l]) => (
@@ -1158,12 +1172,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                           title="评级序列，从优到劣，用逗号分隔"
                         />
                       )}
-                      <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
+                      <div className="flex items-center gap-0.5 flex-wrap rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                         {WEIGHT_TIERS.map((t) => (
                           <button
                             key={t.value}
                             onClick={() => updateDim(dim.id, { weight: t.value })}
-                            className={`px-2 py-1 text-sm rounded transition-all ${
+                            className={`px-2 py-1 text-sm rounded transition-all whitespace-nowrap shrink-0 ${
                               dim.weight === t.value
                                 ? 'bg-brand/20 text-brand font-semibold'
                                 : 'text-slate-500 hover:text-brand-deep'
@@ -1191,8 +1205,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   </button>
                 </div>
 
-                {/* 右：权重饼图 */}
-                <div className="lg:w-64 shrink-0 flex flex-col items-center justify-center p-2">
+                {/* 下：权重饼图 */}
+                <div className="w-full shrink-0 flex flex-col items-center justify-center p-2">
                   <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                     <PieIcon className="h-3.5 w-3.5" /> 权重分布
                   </div>
