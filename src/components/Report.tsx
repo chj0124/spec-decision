@@ -235,6 +235,18 @@ interface SpecRow {
 /** 非冠军柱的中性色（亮 / 暗各一） */
 const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
 
+/**
+ * 把一条避坑提示拆成「粗体结论 + 灰色细节」两行（图注排版用）。
+ * 提示句都是「结论，补充说明。」的写法，于是在第一个逗号处断开：
+ * 「」单价比「」贵 357% ／ 除非有特殊需求，否则是明显的智商税。
+ */
+function splitWarnText(text: string): { lead: string; detail: string } {
+  const i = text.indexOf('，')
+  const strip = (s: string) => s.replace(/[。，]$/, '')
+  if (i === -1) return { lead: strip(text), detail: '' }
+  return { lead: strip(text.slice(0, i)), detail: text.slice(i + 1) }
+}
+
 /* ============ 避坑对照的图形标注：四种画法（都做出来，比较后再做减法） ============ */
 
 /** 避坑标注样式：右缘括线 / 行高亮 / 差值段 / 同号徽标 */
@@ -245,7 +257,7 @@ const WARN_STYLE_OPTIONS: Array<{ k: WarnStyle; label: string; hint: string; cap
   { k: 'bracket', label: '右缘括线', hint: '在图右侧用一个括线把被对照的两条横条框在一起，编号挂在括线中间。', caption: '图上右侧括线框住的正是被对照的两条规格' },
   { k: 'band', label: '行高亮', hint: '把被对照的两条横条整行铺一层淡黄底，像表格里高亮那两行。', caption: '图上铺了淡黄底的两行正是被对照的规格' },
   { k: 'delta', label: '差值段', hint: '在较贵那条上标出「比便宜那条多出来的这一截」，并标清贵了多少。', caption: '图上粗黄段标出了贵出来的那一截' },
-  { k: 'badge', label: '同号徽标', hint: '不画线，只在两条横条右侧的空白里各挂一个同号徽标，与下方文字对号入座。', caption: '图上的同号徽标对应下面每一条' },
+  { k: 'badge', label: '同号徽标', hint: '不画线，只在两条横条右侧的空白里各挂一个同号徽标，与下方文字对号入座。', caption: '两条同号徽标指的就是被对照的规格' },
 ]
 
 /** 图例里的小标记：与当前避坑标注画法保持一致 */
@@ -893,6 +905,13 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   ]
   const activeVisual = VISUAL_OPTIONS.find((o) => o.k === visual) ?? VISUAL_OPTIONS[0]
   const activeWarnStyle = WARN_STYLE_OPTIONS.find((o) => o.k === warnStyle) ?? WARN_STYLE_OPTIONS[0]
+  // 图注：把「这张图怎么读」压成一句话，紧跟在图下的避坑注释之后
+  const figureNote =
+    visual === 'quadrant'
+      ? '横轴是总量、纵轴是单位成本，越靠左下越划算，连线即逐档升档路径。'
+      : warningPairs.length > 0
+        ? `横条越长代表单价越高。${activeWarnStyle.caption}，编号与下面每一条一一对应。`
+        : '横条越长代表单价越高，虚线是全场平均价。'
 
   return (
     <div ref={reportRef} className="space-y-8">
@@ -1237,60 +1256,67 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             />
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: chartTheme.series.unitPrice }} />
-              推荐规格
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: neutralBar(chartTheme.dark) }} />
-              其余规格
-            </span>
-            {visual === 'quadrant' && (
-              <span className="inline-flex items-center gap-1">
-                <span className="inline-block w-3 h-3 rounded-full" style={{ background: chartTheme.series.drop }} />
-                最划算点
-              </span>
-            )}
-            {visual !== 'quadrant' && warningPairs.length > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <WarnLegendMark warnStyle={warnStyle} color={chartTheme.series.margin} />
-                避坑对照（编号见下）
-              </span>
-            )}
-            <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
-          </div>
-
-          {/* 避坑提示：并入主视觉，图上的标注 + 编号直接指向被对照的两条横条 */}
-          {(warningPairs.length > 0 || warningNotes.length > 0) && (
-            <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-4">
-              <h4 className="text-xs font-bold tracking-tight mb-3 flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-                <AlertTriangle className="h-3.5 w-3.5" /> 避坑提示
-                {visual !== 'quadrant' && warningPairs.length > 0 && (
-                  <span className="font-normal text-amber-600/70 dark:text-amber-400/70">· {activeWarnStyle.caption}</span>
-                )}
-              </h4>
-              <ul className="space-y-2">
-                {warningPairs.map((p, i) => (
-                  <li key={`pair-${i}`} className="flex gap-2">
-                    <span
-                      className="shrink-0 mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-white"
-                      style={{ background: chartTheme.series.margin }}
-                    >
-                      {i + 1}
-                    </span>
-                    <p className="text-xs text-slate-600 leading-relaxed">{p.text}</p>
-                  </li>
-                ))}
+          {/* 图-caption：紧贴图下方，把避坑提示写成这张图的注释（粗体结论 + 灰色细节），再附图注与图例 */}
+          <div className="mt-3 px-1">
+            {(warningPairs.length > 0 || warningNotes.length > 0) && (
+              <div className="space-y-2.5">
+                {warningPairs.map((p, i) => {
+                  const { lead, detail } = splitWarnText(p.text)
+                  return (
+                    <div key={`pair-${i}`} className="flex items-start gap-2">
+                      <span
+                        className="shrink-0 mt-[1px] inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                        style={{ background: chartTheme.series.margin }}
+                      >
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-[13px] font-bold leading-snug text-amber-600 dark:text-amber-400">{lead}</p>
+                        {detail && <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{detail}</p>}
+                      </div>
+                    </div>
+                  )
+                })}
                 {warningNotes.map((n, i) => (
-                  <li key={`note-${i}`} className="flex gap-2">
-                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                    <p className="text-xs text-slate-600 leading-relaxed">{n}</p>
-                  </li>
+                  <div key={`note-${i}`} className="flex items-start gap-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-[3px]" />
+                    <p className="text-xs leading-relaxed text-slate-500">{n}</p>
+                  </div>
                 ))}
-              </ul>
+              </div>
+            )}
+
+            {(warningPairs.length > 0 || warningNotes.length > 0) && (
+              <p className="mt-3 border-t border-edge pt-2.5 text-xs leading-relaxed text-slate-500">
+                <span className="font-bold text-slate-600 dark:text-slate-300">图 1 ｜ </span>
+                {figureNote}
+              </p>
+            )}
+
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded-sm" style={{ background: chartTheme.series.unitPrice }} />
+                推荐规格
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded-sm" style={{ background: neutralBar(chartTheme.dark) }} />
+                其余规格
+              </span>
+              {visual === 'quadrant' && (
+                <span className="inline-flex items-center gap-1">
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ background: chartTheme.series.drop }} />
+                  最划算点
+                </span>
+              )}
+              {visual !== 'quadrant' && warningPairs.length > 0 && (
+                <span className="inline-flex items-center gap-1">
+                  <WarnLegendMark warnStyle={warnStyle} color={chartTheme.series.margin} />
+                  避坑对照（编号见下）
+                </span>
+              )}
+              <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
             </div>
-          )}
+          </div>
         </motion.section>
       )}
 
