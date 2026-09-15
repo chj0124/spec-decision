@@ -1,5 +1,5 @@
 // 端到端冒烟：真浏览器跑通「启动 → 生成示例 → 出报告 → 导出 PNG」主链路，并守住几条易回归的约束
-// （首屏不预载 charts / html-to-image chunk、PWA manifest、备份入口、主题切换、移动端无横向溢出）。
+// （首屏不预载 charts / html-to-image chunk、PWA manifest、页脚版本号、备份入口、主题切换、移动端无横向溢出）。
 //
 // 用法：npm run e2e        （会先 npm run build，再起 vite preview，跑完自动关闭）
 //
@@ -16,6 +16,9 @@ import { chromium } from 'playwright'
 import { BASE_URL, HOST, PORT, STARTUP_TIMEOUT_MS, STEP_TIMEOUT_MS, VIEWPORTS } from './config.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+// 版本号断言不写死字面量：从 package.json 读，升版本时 e2e 不会跟着挂
+const { version: pkgVersion } = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf-8'))
 
 const results = []
 function check(name, passed, detail) {
@@ -108,6 +111,10 @@ async function runSmoke(browser, name, viewport) {
 
     const footer = await page.getByText('数据仅保存在你的浏览器本地').count()
     check(`[${name}] 页脚说明存在`, footer > 0, `count=${footer}`)
+
+    // 版本号来自 package.json，构建期由 vite define 注入，页脚须原样展示
+    const versionText = await page.getByText(`v${pkgVersion}`, { exact: true }).count()
+    check(`[${name}] 页脚显示版本号`, versionText > 0, `expect v${pkgVersion} · count=${versionText}`)
 
     /* --- 首屏瘦身护栏：charts chunk 不得出现在 modulepreload 里 --- */
     const preloads = await page.$$eval('link[rel="modulepreload"]', (ls) =>

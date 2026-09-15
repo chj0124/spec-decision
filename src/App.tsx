@@ -401,6 +401,8 @@ export default function App() {
 
       <footer className="max-w-7xl mx-auto px-6 pb-8 text-center text-xs text-slate-500">
         数据仅保存在你的浏览器本地 · 纯前端工具 · 不上传任何信息
+        {/* 版本号来自 package.json，构建期注入；单独一行以免打断上面这句 e2e 断言依赖的文案 */}
+        <span className="mt-1 block font-mono text-[11px] text-slate-400">v{__APP_VERSION__}</span>
       </footer>
     </div>
   )

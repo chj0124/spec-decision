@@ -1,6 +1,14 @@
+import { readFileSync } from 'node:fs'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { proxyChat, proxyModels } from './shared/aiProxyCore.js'
+
+// 版本号单一来源：package.json。
+// 构建时内联成字符串字面量，既不把整个 package.json 打进产物，
+// 也避免依赖 JSON 导入在不同构建器下的 default interop 差异。
+const { version } = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf-8'),
+) as { version: string }
 
 // 关键：禁用 Node fetch 的系统代理读取。
 // 本机有 HTTPS_PROXY=http://127.0.0.1:7897（Clash），Node fetch 默认会走它，
@@ -54,6 +62,10 @@ function aiProxyPlugin(): Plugin {
 export default defineConfig({
   plugins: [react(), aiProxyPlugin()],
   base: './',
+  // 构建期把 package.json 的版本号内联成常量，前端直接读 __APP_VERSION__
+  define: {
+    __APP_VERSION__: JSON.stringify(version),
+  },
   build: {
     chunkSizeWarningLimit: 900,
     rollupOptions: {
