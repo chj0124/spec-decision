@@ -401,6 +401,65 @@ function UpgradeCard({ m }: { m: MarginInsight }) {
   )
 }
 
+/* ============ 预算输入框：字符串草稿 + 数字解析，专治「输到一半被打断」 ============ */
+function BudgetInput({
+  value,
+  onChange,
+  className,
+}: {
+  value?: number
+  onChange: (v: number | undefined) => void
+  className?: string
+}) {
+  // 不把数字直接回写进 input.value：受控的 type="number" 每次回写都会把光标打到开头，
+  // 后续按键被插到最前面（实测输 19.9 会变成 919）；而 "" / "19." 这类中间态还会被
+  // 浏览器直接清空。改成 text + inputMode="decimal" 并存字符串草稿，按键就原样留在框里。
+  const [draft, setDraft] = useState(value === undefined ? '' : String(value))
+  const [focused, setFocused] = useState(false)
+  // 外部改动（切偏好 / 分享导入 / 换工作区）时同步；正在输入时不打扰
+  useEffect(() => {
+    if (!focused) setDraft(value === undefined ? '' : String(value))
+  }, [value, focused])
+  const apply = (raw: string) => {
+    const t = raw.trim()
+    if (t === '') {
+      onChange(undefined)
+      return
+    }
+    const n = Number(t)
+    // 只认非负有限数：NaN / 负号 / 多个小数点都按「没填预算」处理，避免把 NaN 传下去
+    onChange(Number.isFinite(n) && n >= 0 ? n : undefined)
+  }
+  // 改成 text 后字母也进得来，这里挡掉：只留数字与小数点，且最多一个小数点。
+  // 这样用户按错键时框里不会留一个解析不了的 "12abc"，也不用等失焦才清理。
+  const sanitize = (raw: string) => {
+    const cleaned = raw.replace(/[^\d.]/g, '')
+    const dot = cleaned.indexOf('.')
+    return dot === -1 ? cleaned : cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '')
+  }
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      aria-label="预算"
+      value={draft}
+      onFocus={() => setFocused(true)}
+      // 失焦即收尾：按已提交的值回显，清掉 "12." 这类没收尾的残留
+      onBlur={() => setFocused(false)}
+      onChange={(e) => {
+        const next = sanitize(e.target.value)
+        setDraft(next)
+        apply(next)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+      }}
+      placeholder="¥"
+      className={className}
+    />
+  )
+}
+
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
@@ -532,56 +591,36 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
       .map(({ key, label }) => ({ key, label }))
   })()
 
-  if (items.length === 0) {
-    // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
-    const budgetEmpty = config.preference === 'budget' && result.budgetExcluded > 0
-    return (
-      <div className="glass rounded-2xl p-12 text-center space-y-4">
-        <Scale className="h-12 w-12 mx-auto text-slate-600" />
-        {budgetEmpty ? (
-          <>
-            <p className="text-slate-400">
-              预算 <span className="text-brand font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
-              （{result.budgetExcluded} 个规格全部超出预算）。
-            </p>
-            <p className="text-sm text-slate-500 -mt-2">可直接放宽预算，或切换为「性价比优先 / 综合得分优先」再看。</p>
-          </>
-        ) : (
-          <p className="text-slate-400">还没有可对比的规格，先回工作台填写。</p>
-        )}
-        {/* 空态自愈：预算偏好下的空态不该只能退回工作台，就地放宽预算 / 换偏好即可继续看报告 */}
-        {budgetEmpty && (
-          <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
-            <label className="flex items-center gap-1.5">
-              <span className="text-xs text-slate-500">预算</span>
-              <input
-                type="number"
-                min={0}
-                value={config.budget ?? ''}
-                onChange={(e) =>
-                  onBudgetChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
-                }
-                placeholder="¥"
-                className="field py-1.5 text-sm w-28 tabular text-center"
-              />
-            </label>
-            <button
-              onClick={() => onPreferenceChange('value')}
-              className="px-4 py-2 rounded-xl bg-brand/15 text-brand text-sm font-semibold hover:bg-brand/25 transition-all"
-            >
-              改为「性价比优先」
-            </button>
-          </div>
-        )}
-        <button
-          onClick={onBack}
-          className="px-5 py-2.5 rounded-xl text-sm font-semibold text-slate-500 border border-edge hover:text-brand-deep hover:border-brand/40 transition-all inline-flex items-center gap-2"
-        >
-          <ArrowLeft className="h-4 w-4" /> {budgetEmpty ? '返回调整' : '返回工作台'}
-        </button>
-      </div>
-    )
-  }
+  // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
+  const budgetEmpty = items.length === 0 && config.preference === 'budget' && result.budgetExcluded > 0
+
+  // 空态不再整页 return：那样会把上方工具条连同预算输入框一起卸载，用户输到一半的预算
+  // 会丢焦点、后续按键全部丢失（表现为"只能填进一位数"）。这里只当正文块渲染，
+  // 工具条与预算输入框始终挂载，把预算调大即可自愈。
+  const emptyState = (
+    <div className="glass rounded-2xl p-12 text-center space-y-4">
+      <Scale className="h-12 w-12 mx-auto text-slate-600" />
+      {budgetEmpty ? (
+        <>
+          <p className="text-slate-400">
+            预算 <span className="text-brand font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
+            （{result.budgetExcluded} 个规格全部超出预算）。
+          </p>
+          <p className="text-sm text-slate-500 -mt-2">
+            在上方把预算调大，或切换为「性价比优先 / 综合得分优先」即可继续看报告。
+          </p>
+        </>
+      ) : (
+        <p className="text-slate-400">还没有可对比的规格，先回工作台填写。</p>
+      )}
+      <button
+        onClick={onBack}
+        className="px-5 py-2.5 rounded-xl text-sm font-semibold text-slate-500 border border-edge hover:text-brand-deep hover:border-brand/40 transition-all inline-flex items-center gap-2"
+      >
+        <ArrowLeft className="h-4 w-4" /> {budgetEmpty ? '返回调整' : '返回工作台'}
+      </button>
+    </div>
+  )
 
   // 决策单元：簇视图按簇，全量视图按单个规格
   const decisionUnits = view === 'cluster' ? clusters : null
@@ -608,10 +647,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   })()
   // 展示单位标签（L / kg / 件…）：取列表里实际出现的单位换算结果
   const visualUnit = displayUnit(items[0]?.unit ?? '')
-  // 高亮锚点：优先冠军规格；万一它被合并进同价变体，就退而选单价最低的那条
+  // 高亮锚点：优先冠军规格；万一它被合并进同价变体，就退而选单价最低的那条。
+  // 预算偏好下可能一条都不剩（items 为空），此时给空串兜底——空态不渲染主视觉，
+  // 但这里在 return 之前求值，不给兜底会直接抛错把整个报告页打崩。
   const visualAnchorId =
     specRows.find((r) => r.id === best?.id)?.id ??
-    specRows.reduce((min, r) => (r.perUnit < min.perUnit ? r : min), specRows[0]).id
+    (specRows.length > 0
+      ? specRows.reduce((min, r) => (r.perUnit < min.perUnit ? r : min), specRows[0]).id
+      : '')
 
   // 一句话结论：把"最划算"折算成「每单位省了多少钱 + 便宜百分之几 + 等量能省多少」，
   // 不读表格也能直接拿到性价比结论。
@@ -719,14 +762,9 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           {config.preference === 'budget' && (
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-slate-500">预算</span>
-              <input
-                type="number"
-                min={0}
-                value={config.budget ?? ''}
-                onChange={(e) =>
-                  onBudgetChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
-                }
-                placeholder="¥"
+              <BudgetInput
+                value={config.budget}
+                onChange={onBudgetChange}
                 className="field py-1 text-xs w-20 tabular"
               />
             </div>
@@ -782,6 +820,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </div>
       )}
 
+      {/* 空态只替换正文：工具条（含预算输入框）始终挂载，用户把预算调大即可自愈，
+          不会出现"输到一半输入框被卸载、焦点丢失、后面按的键全丢"的问题 */}
+      {items.length === 0 ? (
+        emptyState
+      ) : (
+        <>
       {/* ① 一句话结论：不读表格就能拿到的性价比答案 */}
       {oneLiner && (
         <motion.div
@@ -1223,6 +1267,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
         )}
       </section>
+        </>
+      )}
     </div>
   )
 }
