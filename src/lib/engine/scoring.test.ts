@@ -172,12 +172,19 @@ describe('decide 主入口', () => {
     expect(r.best?.id).toBe('b')
   })
 
-  it("preference='budget' 统计被预算过滤掉的规格数", () => {
+  it("preference='budget' 时超预算的规格被排除并原样带出", () => {
     const a = sku({ id: 'a', price: 10, quantity: 100, packs: 1 })
     const b = sku({ id: 'b', price: 20, quantity: 100, packs: 1 })
     const r = decide([a, b], cfg({ preference: 'budget', budget: 12 }))
-    expect(r.budgetExcluded).toBe(1)
+    expect(r.budgetExcludedItems.map((i) => i.id)).toEqual(['b'])
     expect(r.best?.id).toBe('a')
+  })
+
+  it('非预算偏好时不产生被排除项', () => {
+    const a = sku({ id: 'a', price: 10, quantity: 100, packs: 1 })
+    const b = sku({ id: 'b', price: 20, quantity: 100, packs: 1 })
+    const r = decide([a, b], cfg({ preference: 'value', budget: 12 }))
+    expect(r.budgetExcludedItems).toEqual([])
   })
 
   it('空输入返回空结果而非抛错', () => {

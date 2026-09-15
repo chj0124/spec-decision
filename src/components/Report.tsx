@@ -4,7 +4,7 @@ import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLab
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
-  Printer, Copy, Check, Share2, Minus, ImageDown, Loader2,
+  Printer, Copy, Check, Share2, Minus, ImageDown, Loader2, FilterX,
 } from 'lucide-react'
 import { motion, AnimatePresence, animate } from 'framer-motion'
 import { useChartTheme, type ChartTheme } from '../lib/useChartTheme'
@@ -82,6 +82,27 @@ const packWord = (packs: number, packUnit?: string): string =>
 const listPackWord = (items: ComputedSku[]): string =>
   items.find((i) => i.packUnit)?.packUnit || (items.some((i) => i.packs > 1) ? '包' : '件')
 
+/**
+ * 因超预算被排除的规格清单：逐条列出规格名、总价与超出预算的金额。
+ * 预算偏好会把超预算的规格从排名里过滤掉，如果不显式交代，它们就等于无声消失，
+ * 用户无从判断"是数据没识别到"还是"被预算规则筛掉了"。
+ */
+function BudgetExcludedList({ items, budget }: { items: ComputedSku[]; budget: number }) {
+  return (
+    <ul aria-label="因超预算被排除的规格" className="space-y-1.5">
+      {items.map((it) => (
+        <li key={it.id} className="flex items-baseline justify-between gap-3 text-xs">
+          <span className="text-slate-600 truncate">{it.name}</span>
+          <span className="shrink-0 tabular">
+            <span className="text-slate-500">{fmt.yuan(it.price)}</span>
+            <span className="text-amber-500 ml-1.5">超 {fmt.yuan(it.price - budget)}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
 /** 写剪贴板：优先 Clipboard API，非安全上下文/旧浏览器回退 execCommand */
 async function writeClipboard(text: string): Promise<void> {
   try {
@@ -102,7 +123,7 @@ async function writeClipboard(text: string): Promise<void> {
 
 /** 生成纯文本决策摘要（复制到剪贴板 / 导出用） */
 function buildSummaryText(result: DecisionResult, config: DecisionConfig): string {
-  const { best, items, reasons, warnings, margins } = result
+  const { best, items, reasons, warnings, margins, budgetExcludedItems } = result
   if (!best) return ''
   const lines: string[] = []
   lines.push('【规格决策摘要】')
@@ -132,6 +153,15 @@ function buildSummaryText(result: DecisionResult, config: DecisionConfig): strin
   items.slice(0, 5).forEach((it) => {
     lines.push(`  ${it.rank}. ${it.name} — 每${displayUnit(it.unit)} ${fmt.priceUnit(displayUnitPrice(it.unitPrice, it.unit))}（总价 ${fmt.yuan(it.price)}）`)
   })
+  // 被预算筛掉的规格也要写进摘要：粘贴出去后更要能自查"是我漏填了还是被规则排除了"
+  const budget = config.budget
+  if (config.preference === 'budget' && typeof budget === 'number' && budgetExcludedItems.length > 0) {
+    lines.push('')
+    lines.push(`因超预算未纳入比较（预算 ${fmt.yuan(budget)}，按超出金额从少到多）：`)
+    budgetExcludedItems.forEach((it) => {
+      lines.push(`  · ${it.name} — 总价 ${fmt.yuan(it.price)}，超 ${fmt.yuan(it.price - budget)}`)
+    })
+  }
   if (margins.length > 0) {
     lines.push('')
     lines.push('边际效益：')
@@ -592,7 +622,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   })()
 
   // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
-  const budgetEmpty = items.length === 0 && config.preference === 'budget' && result.budgetExcluded > 0
+  const budgetEmpty = items.length === 0 && config.preference === 'budget' && result.budgetExcludedItems.length > 0
 
   // 空态不再整页 return：那样会把上方工具条连同预算输入框一起卸载，用户输到一半的预算
   // 会丢焦点、后续按键全部丢失（表现为"只能填进一位数"）。这里只当正文块渲染，
@@ -604,8 +634,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         <>
           <p className="text-slate-400">
             预算 <span className="text-brand font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
-            （{result.budgetExcluded} 个规格全部超出预算）。
+            （{result.budgetExcludedItems.length} 个规格全部超出预算）。
           </p>
+          {/* 空态也要交代"被排除了哪些"，否则用户只知道数量、不知道是谁 */}
+          {typeof config.budget === 'number' && (
+            <div className="max-w-sm mx-auto text-left rounded-xl border border-edge/60 px-3 py-2.5">
+              <BudgetExcludedList items={result.budgetExcludedItems} budget={config.budget} />
+            </div>
+          )}
           <p className="text-sm text-slate-500 -mt-2">
             在上方把预算调大，或切换为「性价比优先 / 综合得分优先」即可继续看报告。
           </p>
@@ -717,7 +753,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           <button
             onClick={copySummary}
             className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
-            title="复制纯文本决策摘要（推荐规格、排名、边际效益与避坑提示）到剪贴板"
+            title="复制纯文本决策摘要（推荐规格、排名、超预算排除说明、边际效益与避坑提示）到剪贴板"
           >
             {copied
               ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">已复制</span></>
@@ -1136,7 +1172,22 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </section>
       )}
 
-      {/* ⑤ 明细（默认收起）：完整排名表，支持簇化简 / 全量切换与分组折叠 */}
+      {/* ⑤ 因超预算被排除：把"消失的选项"显式交代，避免用户以为数据没识别到 */}
+      {config.preference === 'budget' && typeof config.budget === 'number' && result.budgetExcludedItems.length > 0 && (
+        <section className="rounded-2xl border border-edge/60 bg-slate-500/5 p-5">
+          <h3 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
+            <FilterX className="h-4 w-4 text-slate-400" /> 因超预算未纳入比较
+            <span className="text-xs font-normal text-slate-500">共 {result.budgetExcludedItems.length} 项</span>
+          </h3>
+          <p className="text-xs text-slate-500 leading-relaxed mb-3">
+            以下规格总价超过你设置的预算 {fmt.yuan(config.budget)}，已按「预算优先」规则排除在排名之外
+            （按超出金额从少到多排列）。在上方把预算调大，即可让它们重新参与比较。
+          </p>
+          <BudgetExcludedList items={result.budgetExcludedItems} budget={config.budget} />
+        </section>
+      )}
+
+      {/* ⑥ 明细（默认收起）：完整排名表，支持簇化简 / 全量切换与分组折叠 */}
       <section className="glass rounded-2xl p-6">
         <button
           onClick={() => setShowDetail((v) => !v)}

@@ -107,8 +107,13 @@ export interface DecisionResult {
   reasons: string[] // 推荐理由
   clusters: SkuCluster[] // 按定价因子聚合后的决策单元
   hasVariants: boolean // 是否存在"同定价多口味"的干扰维度
-  /** 预算偏好下被"超预算"过滤掉的规格数（items 为空时用于区分"没数据"与"预算内无匹配"） */
-  budgetExcluded: number
+  /**
+   * 预算偏好下因"总价超预算"被排除在排名外的规格（按总价升序 = 最接近预算的排前面）。
+   * 报告页据此显式说明"哪些选项被排除了、各超了多少"——只留一个计数的话，
+   * 它们会在报告里无声消失，用户不知道是自己漏填了还是被规则筛掉了。
+   * items 为空时，本数组非空即代表"预算内无匹配"而非"没数据"。
+   */
+  budgetExcludedItems: ComputedSku[]
 }
 
 export type Theme = 'dark' | 'light'
