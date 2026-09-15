@@ -22,6 +22,18 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
   // 当前 baseUrl 对应的预设（用于显示"访问控制台"链接）
   const matchedPreset = AI_PRESETS.find((p) => p.baseUrl && p.baseUrl === form.baseUrl)
 
+  const visionModelName = (form.visionModel ?? '').trim()
+  // 视觉模型仅在非空时才生效（getVisionModel 优先取它），填错会把上方正确的 Model 悄悄顶掉，
+  // 所以这里主动校验两种典型误填：填了别家服务商的模型名、填了本服务商并没有的模型名。
+  const foreignPreset = visionModelName
+    ? AI_PRESETS.find((p) => p.visionModel && p.visionModel === visionModelName && p.baseUrl !== form.baseUrl)
+    : undefined
+  const visionWarning = foreignPreset
+    ? `「${visionModelName}」属于「${foreignPreset.label}」，但当前 Base URL 不是它，视觉识别会失败。留空即复用上面的 Model，或改填本服务商的视觉模型。`
+    : visionModelName && modelList && modelList.length > 0 && !modelList.includes(visionModelName)
+      ? `服务商的可用模型里没有「${visionModelName}」，视觉识别会返回 400。留空即复用上面的 Model${form.model ? `（${form.model}）` : ''}。`
+      : null
+
   // 弹窗打开时同步外部已保存配置；关闭即丢弃未保存的编辑，避免"面板显示与实际生效不一致"
   useEffect(() => {
     if (open) setForm(config)
@@ -230,8 +242,13 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                   </div>
                 )}
                 <span className="text-sm text-slate-400 mt-1 block">
-                  注意：DeepSeek 不支持视觉。请配通义 qwen-vl-plus / 智谱 glm-4v-flash / OpenAI gpt-4o-mini 等多模态模型。
+                  该框留空即复用上面的 Model。仅当所选服务商需要单独的视觉模型时才填，如通义 qwen-vl-plus / 智谱 glm-4v-flash / OpenAI gpt-4o-mini。DeepSeek 的 deepseek-flash 本身就能识图，直接留空即可。
                 </span>
+                {visionWarning && (
+                  <p className="text-xs text-red-500 mt-1 flex items-start gap-1">
+                    <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" /> {visionWarning}
+                  </p>
+                )}
               </label>
             </div>
 

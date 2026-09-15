@@ -4,8 +4,8 @@
 export interface AiConfig {
   baseUrl: string // 接口地址，如 https://api.deepseek.com/v1
   apiKey: string
-  model: string // 如 deepseek-chat / qwen-plus / glm-4 / gpt-4o-mini
-  /** 视觉模型（用于截图识别）。留空则用 model。注意 DeepSeek 不支持视觉。 */
+  model: string // 如 deepseek-flash / qwen-plus / glm-4 / gpt-4o-mini
+  /** 视觉模型（用于截图识别）。留空则复用 model。注意：DeepSeek 的 deepseek-flash 本身支持视觉。 */
   visionModel?: string
   enabled: boolean
 }
@@ -149,7 +149,7 @@ export async function chat(
 
 /**
  * 调多模态视觉模型：传图片 base64 + 文字 prompt，返回文本。
- * 用于截图识别。要求模型支持视觉（DeepSeek 不支持，需用 qwen-vl-plus / glm-4v-flash / gpt-4o-mini 等）。
+ * 用于截图识别。要求模型支持视觉（如 deepseek-flash / qwen-vl-plus / glm-4v-flash / gpt-4o-mini）。
  * 自动加 thinking:false 禁用豆包推理（大幅减少响应时间），其他服务商不受影响。
  */
 export async function visionChat(

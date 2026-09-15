@@ -249,8 +249,8 @@ export default function RecognizeReview({
                   <p className="text-sm text-slate-500 mt-2">
                     请到「AI 设置」检查配置：
                     <br />1. Base URL / API Key 是否正确
-                    <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-brand">qwen-vl-plus</code> / <code className="font-mono text-brand">glm-4v-flash</code> / <code className="font-mono text-brand">gpt-4o-mini</code>
-                    <br />3. DeepSeek 不支持视觉，需换其他服务商
+                    <br />2. 视觉模型（Vision Model）是否填了当前服务商真实支持的多模态模型，如 <code className="font-mono text-brand">deepseek-flash</code> / <code className="font-mono text-brand">qwen-vl-plus</code> / <code className="font-mono text-brand">glm-4v-flash</code> / <code className="font-mono text-brand">gpt-4o-mini</code>；留空即复用上面的 Model
+                    <br />3. 模型名不被服务商接受时会返回 400，请照上一条核对模型名是否写错
                   </p>
                 )}
               </div>

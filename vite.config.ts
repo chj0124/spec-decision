@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { defineConfig, type Plugin } from 'vite'
+import type { ServerResponse } from 'node:http'
+import { defineConfig, type Connect, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { proxyChat, proxyModels } from './shared/aiProxyCore.js'
 
@@ -23,38 +24,47 @@ delete process.env.https_proxy
 // 由 vite dev server（Node 端）转发到真实服务商，响应原样返回。
 // 校验与转发逻辑在 shared/aiProxyCore.js，与 Vercel / Cloudflare 部署共用一份。
 function aiProxyPlugin(): Plugin {
+  const middleware = async (req: Connect.IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
+    const url = req.url || ''
+    const isModels = url.startsWith('/api/ai-models')
+    const isChat = url.startsWith('/api/ai-chat')
+    if (!isModels && !isChat) return next()
+
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.end('Method Not Allowed')
+      return
+    }
+
+    try {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) {
+        chunks.push(chunk as Buffer)
+      }
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+      const { status, text } = isChat ? await proxyChat(body) : await proxyModels(body)
+      res.statusCode = status
+      res.setHeader('Content-Type', 'application/json')
+      res.end(text)
+    } catch (e: any) {
+      console.error('[ai-proxy] error:', e?.message ?? e)
+      res.statusCode = 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: e?.message ?? '上游请求失败' }))
+    }
+  }
+
   return {
     name: 'ai-proxy',
     configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        const url = req.url || ''
-        const isModels = url.startsWith('/api/ai-models')
-        const isChat = url.startsWith('/api/ai-chat')
-        if (!isModels && !isChat) return next()
-
-        if (req.method !== 'POST') {
-          res.statusCode = 405
-          res.end('Method Not Allowed')
-          return
-        }
-
-        try {
-          const chunks: Buffer[] = []
-          for await (const chunk of req) {
-            chunks.push(chunk as Buffer)
-          }
-          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
-          const { status, text } = isChat ? await proxyChat(body) : await proxyModels(body)
-          res.statusCode = status
-          res.setHeader('Content-Type', 'application/json')
-          res.end(text)
-        } catch (e: any) {
-          console.error('[ai-proxy] error:', e?.message ?? e)
-          res.statusCode = 502
-          res.setHeader('Content-Type', 'application/json')
-          res.end(JSON.stringify({ error: e?.message ?? '上游请求失败' }))
-        }
-      })
+      server.middlewares.use(middleware)
+    },
+    // preview 服务器不继承 dev 中间件。若不挂代理，POST /api/ai-chat 会落到
+    // SPA fallback 返回 index.html（状态 200 但内容是 HTML），前端解析不出
+    // choices[0].message.content，只会报"AI 返回为空（代理未正确部署或被拦截）"，
+    // 让人误以为是线上代理坏了。这里复用同一份中间件。
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware)
     },
   }
 }
