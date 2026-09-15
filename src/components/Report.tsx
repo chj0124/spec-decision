@@ -4,7 +4,7 @@ import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel } from '../lib/eng
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
-  Printer, Copy, Check, Radar as RadarIcon,
+  Printer, Copy, Check, Radar as RadarIcon, Share2,
 } from 'lucide-react'
 import { motion, AnimatePresence, animate } from 'framer-motion'
 import { useChartTheme } from '../lib/useChartTheme'
@@ -21,6 +21,8 @@ interface Props {
   onBack: () => void
   onPreferenceChange: (p: Preference) => void
   onBudgetChange: (budget: number | undefined) => void
+  /** 生成可分享链接（只读视图下不传，则不显示分享按钮） */
+  getShareUrl?: () => Promise<string>
 }
 
 const RANK_ICON = [Crown, Medal, Award]
@@ -65,6 +67,24 @@ function shortLabel(it: ComputedSku): string {
   const { spec, flavor } = parseFlavor(it.name)
   if (spec && spec.length <= 16) return flavor ? `${flavor}·${spec}` : spec
   return it.name.length > 16 ? it.name.slice(0, 16) + '…' : it.name
+}
+
+/** 写剪贴板：优先 Clipboard API，非安全上下文/旧浏览器回退 execCommand */
+async function writeClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {
+    /* 继续走回退路径 */
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  try { document.execCommand('copy') } catch { /* 尽力而为 */ }
+  document.body.removeChild(ta)
 }
 
 /** 生成纯文本决策摘要（复制到剪贴板 / 导出用） */
@@ -139,7 +159,7 @@ function groupComputedSkus(
   return [...map.entries()].map(([key, items]) => ({ key, items }))
 }
 
-export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
+export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
 
@@ -148,21 +168,25 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   const copySummary = async () => {
     const text = buildSummaryText(result, config)
     if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      // 兼容非安全上下文（http）与旧浏览器：隐藏 textarea + execCommand
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      try { document.execCommand('copy') } catch { /* 尽力而为 */ }
-      document.body.removeChild(ta)
-    }
+    await writeClipboard(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  // 生成只读分享链接并复制（数据压缩进 URL hash，无需后端）
+  const [shareCopied, setShareCopied] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const copyShareLink = async () => {
+    if (!getShareUrl || sharing) return
+    setSharing(true)
+    try {
+      const url = await getShareUrl()
+      await writeClipboard(url)
+      setShareCopied(true)
+      setTimeout(() => setShareCopied(false), 2500)
+    } finally {
+      setSharing(false)
+    }
   }
 
   // 有干扰维度（同定价多口味）时，默认用簇化简视图
@@ -298,6 +322,18 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">已复制</span></>
               : <><Copy className="h-4 w-4" /> 复制摘要</>}
           </button>
+          {getShareUrl && (
+            <button
+              onClick={copyShareLink}
+              disabled={sharing}
+              className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print disabled:opacity-60"
+              title="生成只读分享链接（清单与配置压缩进 URL，不含任何服务器）并复制到剪贴板"
+            >
+              {shareCopied
+                ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">链接已复制</span></>
+                : <><Share2 className="h-4 w-4" /> {sharing ? '生成中…' : '分享链接'}</>}
+            </button>
+          )}
         </div>
 
         {/* 决策偏好切换 */}

@@ -1,10 +1,13 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
-  loadSkus, saveSkus, loadTheme, saveTheme,
-  loadConfig, saveConfig, migrateV1ToV2,
+  loadTheme, saveTheme, migrateV1ToV2,
+  loadWorkspace, saveWorkspace, newScenario,
 } from './lib/store'
+import type { Scenario, Workspace } from './lib/store'
+import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
+import type { ShareData } from './lib/share'
 import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
 import { useUnitNormalize } from './lib/useUnitNormalize'
@@ -12,22 +15,41 @@ import { unitMixWarning } from './lib/engine'
 import Workbench from './components/Workbench'
 import Report from './components/Report'
 import AiSettings from './components/AiSettings'
-import { Sun, Moon, LineChart, PencilLine, Settings } from 'lucide-react'
+import ScenarioBar from './components/ScenarioBar'
+import { Sun, Moon, LineChart, PencilLine, Settings, Download, Eye, X } from 'lucide-react'
 
 type Page = 'workbench' | 'report'
 
+/** 把改动写回当前激活清单 */
+function patchActive(w: Workspace, patch: Partial<Scenario>): Workspace {
+  return {
+    ...w,
+    scenarios: w.scenarios.map((s) =>
+      s.id === w.activeId ? { ...s, ...patch, updatedAt: Date.now() } : s,
+    ),
+  }
+}
+
 export default function App() {
-  // 启动时先做 v1 → v2 一次性迁移（旧 bonus 字段 → params + dims）
-  const [boot] = useState(() => migrateV1ToV2())
+  // 启动时先做 v1 → v2 一次性迁移（旧 bonus 字段 → params + dims），再加载多清单工作区
+  const [boot] = useState(() => {
+    migrateV1ToV2()
+    return loadWorkspace()
+  })
   const [page, setPage] = useState<Page>('workbench')
-  const [skus, setSkus] = useState<Sku[]>(() => boot.skus)
-  const [config, setConfig] = useState<DecisionConfig>(() => boot.config)
+  const [workspace, setWorkspace] = useState<Workspace>(boot)
   const [theme, setTheme] = useState<Theme>(() => loadTheme())
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => loadAiConfig())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** 非空表示正在查看通过链接打开的报告（只读分享视图，不写入本地清单） */
+  const [shared, setShared] = useState<ShareData | null>(null)
+  const [shareError, setShareError] = useState(false)
 
-  useEffect(() => saveSkus(skus), [skus])
-  useEffect(() => saveConfig(config), [config])
+  const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
+  const skus = shared ? shared.skus : active.skus
+  const config = shared ? shared.config : active.config
+
+  useEffect(() => saveWorkspace(workspace), [workspace])
 
   useEffect(() => {
     saveTheme(theme)
@@ -36,9 +58,92 @@ export default function App() {
     root.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
+  // 打开带 #r= 的分享链接时，解码后进入只读报告视图
+  useEffect(() => {
+    const token = readShareToken()
+    if (!token) return
+    let cancelled = false
+    decodeShare(token).then((data) => {
+      if (cancelled) return
+      if (data) {
+        setShared(data)
+        setPage('report')
+      } else {
+        setShareError(true)
+        clearShareHash()
+      }
+    })
+    return () => { cancelled = true }
+  }, [])
+
   const handleSaveAi = (c: AiConfig) => {
     saveAiConfig(c)
     setAiConfig(c)
+  }
+
+  /* ---------- 清单（场景）管理 ---------- */
+
+  const setSkus = (next: Sku[]) => {
+    if (shared) {
+      setShared((s) => (s ? { ...s, skus: next } : s))
+      return
+    }
+    setWorkspace((w) => patchActive(w, { skus: next }))
+  }
+
+  const setConfig = (next: DecisionConfig) => {
+    if (shared) {
+      setShared((s) => (s ? { ...s, config: next } : s))
+      return
+    }
+    setWorkspace((w) => patchActive(w, { config: next }))
+  }
+
+  const switchScenario = (id: string) => setWorkspace((w) => ({ ...w, activeId: id }))
+
+  const createScenario = (name: string) => setWorkspace((w) => {
+    const sc = newScenario(name)
+    return { scenarios: [...w.scenarios, sc], activeId: sc.id }
+  })
+
+  const renameScenario = (id: string, name: string) =>
+    setWorkspace((w) => ({
+      ...w,
+      scenarios: w.scenarios.map((s) => (s.id === id ? { ...s, name } : s)),
+    }))
+
+  const deleteScenario = (id: string) =>
+    setWorkspace((w) => {
+      if (w.scenarios.length <= 1) return w
+      const scenarios = w.scenarios.filter((s) => s.id !== id)
+      return { scenarios, activeId: w.activeId === id ? scenarios[0].id : w.activeId }
+    })
+
+  /* ---------- 分享 ---------- */
+
+  const getShareUrl = useCallback(async () => {
+    const token = await encodeShare({ skus, config })
+    return buildShareUrl(token)
+  }, [skus, config])
+
+  const exitShared = () => {
+    setShared(null)
+    clearShareHash()
+  }
+
+  const importShared = () => {
+    if (!shared) return
+    const d = new Date()
+    const name = `分享导入 ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const sc = newScenario(name, shared.skus, shared.config)
+    setWorkspace((w) => ({ scenarios: [...w.scenarios, sc], activeId: sc.id }))
+    exitShared()
+    setPage('workbench')
+  }
+
+  const handleBack = () => {
+    if (shared) exitShared()
+    setPage('workbench')
   }
 
   // 生僻单位先经 AI 归一化（本地表已知则直接用，不耗 AI）
@@ -51,12 +156,8 @@ export default function App() {
   const visionReady = isVisionReady()
 
   // 切换偏好（报告页 segmented control 触发）
-  const handlePreferenceChange = (p: Preference) => {
-    setConfig((c) => ({ ...c, preference: p }))
-  }
-  const handleBudgetChange = (budget: number | undefined) => {
-    setConfig((c) => ({ ...c, budget }))
-  }
+  const handlePreferenceChange = (p: Preference) => setConfig({ ...config, preference: p })
+  const handleBudgetChange = (budget: number | undefined) => setConfig({ ...config, budget })
 
   return (
     <div className="min-h-[100dvh] grid-texture">
@@ -71,8 +172,8 @@ export default function App() {
               <h1 className="font-bold text-base sm:text-lg tracking-tight truncate">
                 规格决策台
               </h1>
-              <p className="text-xs text-slate-500 hidden sm:block">
-                多 SKU 比价 · 找出最划算的那一个
+              <p className="text-xs text-slate-500 hidden sm:block truncate">
+                {shared ? '只读分享报告' : `${active.name} · 多 SKU 比价`}
               </p>
             </div>
           </div>
@@ -82,7 +183,8 @@ export default function App() {
             <nav className="flex rounded-xl border border-edge bg-panel/70 p-1 gap-1">
               <button
                 onClick={() => setPage('workbench')}
-                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all ${
+                disabled={Boolean(shared)}
+                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'workbench'
                     ? 'bg-brand text-white shadow-glow'
                     : 'text-slate-500 hover:text-brand-deep hover:bg-brand-soft/60'
@@ -137,8 +239,58 @@ export default function App() {
       />
 
       {/* 主内容 */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-        <div key={page} className="animate-[pageIn_0.25s_ease-out]">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10 space-y-5 sm:space-y-6">
+        {/* 清单条：多份清单互相独立；分享视图下隐藏 */}
+        {!shared && (
+          <ScenarioBar
+            scenarios={workspace.scenarios.map((s) => ({ id: s.id, name: s.name, count: s.skus.length }))}
+            activeId={workspace.activeId}
+            onSwitch={switchScenario}
+            onCreate={createScenario}
+            onRename={renameScenario}
+            onDelete={deleteScenario}
+          />
+        )}
+
+        {/* 分享链接无法解析时的提示 */}
+        {shareError && (
+          <div className="glass rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-amber-500 border-amber-400/40">
+            <AlertIcon />
+            <span className="flex-1">分享链接已损坏或格式不被支持，已返回本地清单。</span>
+            <button onClick={() => setShareError(false)} className="hover:text-amber-400" aria-label="关闭提示">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* 只读分享视图提示条 */}
+        {shared && (
+          <div className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+              <Eye className="h-4 w-4 text-brand shrink-0" />
+              <span>
+                正在查看<strong className="text-brand-deep dark:text-brand">他人分享的报告</strong>
+                （只读）· 共 {shared.skus.length} 个规格 · 本页改动不会保存到你的浏览器
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={importShared}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand text-white hover:opacity-90 transition-opacity inline-flex items-center gap-1.5"
+              >
+                <Download className="h-3.5 w-3.5" /> 导入到我的清单
+              </button>
+              <button
+                onClick={exitShared}
+                className="text-xs px-3 py-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand-deep hover:border-brand/50 transition-all"
+              >
+                退出分享
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div key={`${page}-${shared ? 'shared' : workspace.activeId}`} className="animate-[pageIn_0.25s_ease-out]">
           {page === 'workbench' ? (
             <Workbench
               skus={skus}
@@ -152,9 +304,10 @@ export default function App() {
               result={result}
               config={config}
               unitWarning={unitMixWarning(normalizedSkus)}
-              onBack={() => setPage('workbench')}
+              onBack={handleBack}
               onPreferenceChange={handlePreferenceChange}
               onBudgetChange={handleBudgetChange}
+              getShareUrl={shared ? undefined : getShareUrl}
             />
           )}
         </div>
@@ -164,5 +317,14 @@ export default function App() {
         数据仅保存在你的浏览器本地 · 纯前端工具 · 不上传任何信息
       </footer>
     </div>
+  )
+}
+
+/** 提示条左侧图标（避免为单个图标额外引入命名冲突） */
+function AlertIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M12 9v4M12 17h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }

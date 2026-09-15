@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue } from '../lib/types'
-import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
+import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImage, recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
@@ -516,6 +516,13 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
   return (
     <div className="space-y-6">
+      {/* 单位建议：按量纲分组的常用单位（含换算表内新增的体积/长度/计件单位） */}
+      <datalist id="unit-options">
+        {UNIT_GROUPS.flatMap((g) => g.units).map((u) => (
+          <option key={u} value={u} />
+        ))}
+      </datalist>
+
       {/* 拖入全屏高亮遮罩 */}
       <AnimatePresence>
         {dragging && (
@@ -1214,6 +1221,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
           value={s.unit}
           onChange={(e) => handleField('unit', e.target.value)}
           placeholder="g"
+          list="unit-options"
           minWidth={36}
           className="field py-1.5 text-xs"
         />
@@ -1346,6 +1354,7 @@ function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, fl
             value={s.unit}
             onChange={(e) => handleField('unit', e.target.value)}
             placeholder="g"
+            list="unit-options"
             className="field py-1.5 text-xs"
           />
         </label>

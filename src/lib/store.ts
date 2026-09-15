@@ -1,9 +1,26 @@
 import type { Sku, Theme, DecisionConfig, ParamDim } from './types'
+import { uid } from './engine'
 
 const SKU_KEY = 'spec-decision:skus'
 const THEME_KEY = 'spec-decision:theme'
 const CONFIG_KEY = 'spec-decision:config'
 const MIGRATED_KEY = 'spec-decision:migrated-v2'
+const SCENARIOS_KEY = 'spec-decision:scenarios'
+const ACTIVE_KEY = 'spec-decision:active-scenario'
+
+/** 一份独立清单（场景）：自己的 SKU 列表 + 决策配置，互不干扰 */
+export interface Scenario {
+  id: string
+  name: string
+  skus: Sku[]
+  config: DecisionConfig
+  updatedAt: number
+}
+
+export interface Workspace {
+  scenarios: Scenario[]
+  activeId: string
+}
 
 /** 默认决策配置：仅价格维度 */
 export const DEFAULT_CONFIG: DecisionConfig = {
@@ -11,6 +28,17 @@ export const DEFAULT_CONFIG: DecisionConfig = {
   priceWeight: 50,
   preference: 'value',
   budget: undefined,
+}
+
+/** 新建一个空清单 */
+export function newScenario(name: string, skus: Sku[] = [], config?: DecisionConfig): Scenario {
+  return {
+    id: uid(),
+    name: name.trim() || '未命名清单',
+    skus,
+    config: config ?? { ...DEFAULT_CONFIG, dims: [] },
+    updatedAt: Date.now(),
+  }
 }
 
 export function loadSkus(): Sku[] {
@@ -104,6 +132,54 @@ export function migrateV1ToV2(): { skus: Sku[]; config: DecisionConfig; changed:
   }
   localStorage.setItem(MIGRATED_KEY, '1')
   return { skus: newSkus, config: newConfig, changed: true }
+}
+
+/** 首次升级到多清单：把旧的单份 skus/config 包成「我的清单」 */
+function migrateToWorkspace(): Workspace {
+  const legacySkus = loadSkus()
+  const legacyConfig = loadConfig()
+  const scenario = newScenario(
+    legacySkus.length > 0 ? '我的清单' : '默认清单',
+    legacySkus,
+    legacyConfig,
+  )
+  const ws: Workspace = { scenarios: [scenario], activeId: scenario.id }
+  saveWorkspace(ws)
+  return ws
+}
+
+/** 读取全部清单与当前激活项；无数据或数据损坏时回退到单份旧数据 */
+export function loadWorkspace(): Workspace {
+  try {
+    const raw = localStorage.getItem(SCENARIOS_KEY)
+    if (!raw) return migrateToWorkspace()
+    const parsed = JSON.parse(raw) as Partial<Workspace>
+    const scenarios = (Array.isArray(parsed.scenarios) ? parsed.scenarios : [])
+      .filter((s): s is Scenario => Boolean(s && s.id && Array.isArray(s.skus) && s.config))
+      .map((s) => ({
+        ...s,
+        name: s.name || '未命名清单',
+        config: { ...DEFAULT_CONFIG, ...s.config, dims: Array.isArray(s.config.dims) ? s.config.dims : [] },
+        updatedAt: s.updatedAt ?? Date.now(),
+      }))
+    if (scenarios.length === 0) return migrateToWorkspace()
+
+    const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
+      ? parsed.activeId
+      : scenarios[0].id
+    return { scenarios, activeId }
+  } catch {
+    return migrateToWorkspace()
+  }
+}
+
+export function saveWorkspace(ws: Workspace) {
+  try {
+    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(ws))
+    localStorage.setItem(ACTIVE_KEY, ws.activeId)
+  } catch {
+    /* 忽略写入失败（如隐私模式配额超限） */
+  }
 }
 
 /** 决策引擎与示例生成已迁移至 aiSample.ts（AI 生成 / 内置真实模板兜底）。 */
