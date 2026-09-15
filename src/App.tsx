@@ -266,7 +266,9 @@ export default function App() {
               </button>
               <button
                 onClick={() => setPage('report')}
-                disabled={result.items.length === 0}
+                // 预算把全部规格过滤掉时 items 为空，但报告页此时有专门的空态可看
+                // （可就地放宽预算 / 换偏好），所以这里不能一并禁用，否则会变成回不去的死胡同
+                disabled={result.items.length === 0 && result.budgetExcluded === 0}
                 aria-label="报告"
                 className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'report'

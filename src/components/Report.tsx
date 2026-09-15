@@ -544,14 +544,38 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               预算 <span className="text-brand font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
               （{result.budgetExcluded} 个规格全部超出预算）。
             </p>
-            <p className="text-sm text-slate-500 -mt-2">可提高预算，或切换为「性价比优先 / 综合得分优先」再看。</p>
+            <p className="text-sm text-slate-500 -mt-2">可直接放宽预算，或切换为「性价比优先 / 综合得分优先」再看。</p>
           </>
         ) : (
           <p className="text-slate-400">还没有可对比的规格，先回工作台填写。</p>
         )}
+        {/* 空态自愈：预算偏好下的空态不该只能退回工作台，就地放宽预算 / 换偏好即可继续看报告 */}
+        {budgetEmpty && (
+          <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
+            <label className="flex items-center gap-1.5">
+              <span className="text-xs text-slate-500">预算</span>
+              <input
+                type="number"
+                min={0}
+                value={config.budget ?? ''}
+                onChange={(e) =>
+                  onBudgetChange(e.target.value === '' ? undefined : parseFloat(e.target.value))
+                }
+                placeholder="¥"
+                className="field py-1.5 text-sm w-28 tabular text-center"
+              />
+            </label>
+            <button
+              onClick={() => onPreferenceChange('value')}
+              className="px-4 py-2 rounded-xl bg-brand/15 text-brand text-sm font-semibold hover:bg-brand/25 transition-all"
+            >
+              改为「性价比优先」
+            </button>
+          </div>
+        )}
         <button
           onClick={onBack}
-          className="px-5 py-2.5 rounded-xl bg-brand/15 text-brand text-sm font-semibold hover:bg-brand/25 transition-all inline-flex items-center gap-2"
+          className="px-5 py-2.5 rounded-xl text-sm font-semibold text-slate-500 border border-edge hover:text-brand-deep hover:border-brand/40 transition-all inline-flex items-center gap-2"
         >
           <ArrowLeft className="h-4 w-4" /> {budgetEmpty ? '返回调整' : '返回工作台'}
         </button>
