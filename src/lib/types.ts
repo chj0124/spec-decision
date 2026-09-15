@@ -52,6 +52,12 @@ export interface ComputedSku extends Sku {
   isBest: boolean
   /** 每个维度的 0-100 归一化分（含价格维度 'price'） */
   dimScores?: Record<string, number>
+  /** 性价比锚点值（由 decide 填充）：per-unit=每单位价格；per-feature=每元性能（主参数÷总价） */
+  anchorValue?: number
+  /** 锚点展示标签，如 "每g价格" / "每元电池容量" */
+  anchorLabel?: string
+  /** 锚点方向：true=越大越好（每元性能），false=越小越好（单位价） */
+  anchorHigherBetter?: boolean
 }
 
 /** 边际效益分级 */
@@ -110,16 +116,33 @@ export interface DecisionResult {
   budgetExcluded: number
 }
 
+/** 量纲分组决策结果：混量纲清单按基准单位（g/ml/cm/个）拆组后，每组独立跑一次决策 */
+export interface UnitGroupResult {
+  base: string // 基准单位（g/ml/cm/个 或未知单位原样）
+  result: DecisionResult
+}
+
 export type Theme = 'dark' | 'light'
 
 /** 决策偏好 */
 export type Preference = 'value' | 'score' | 'budget'
+
+/**
+ * 计价模式：
+ * - per-unit    消耗品（饮料/零食/纸巾）：按每单位量（g/ml/个）比价，越低越好
+ * - per-feature 耐用品（手机/家电）：按每元性能（主参数÷总价）比价，越高越好
+ */
+export type CategoryMode = 'per-unit' | 'per-feature'
 
 /** 决策配置：参数维度 + 价格权重 + 偏好 */
 export interface DecisionConfig {
   dims: ParamDim[] // 当前任务的参数维度列表
   priceWeight: number // 价格维度自身权重（默认 50）
   preference: Preference // 决策偏好
+  /** 计价模式，缺省 per-unit */
+  mode?: CategoryMode
+  /** per-feature 模式的主性能维度 id（应指向数值型 higher-better 维度），每元性能 = 该维度值 ÷ 总价 */
+  primaryDimId?: string
   budget?: number // 预算上限（preference=budget 时生效）
   /** 商品类型（由截图识别自动填入，如"零食"/"手机"/"五金螺丝"），用于自适应列名 */
   category?: string

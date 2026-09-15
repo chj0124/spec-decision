@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
+import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, UnitGroupResult } from '../lib/types'
 import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
@@ -13,6 +13,7 @@ import {
   Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ComposedChart, Line,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
+  ScatterChart, Scatter, Cell, LabelList,
 } from 'recharts'
 
 interface Props {
@@ -24,6 +25,8 @@ interface Props {
   onBudgetChange: (budget: number | undefined) => void
   /** 生成可分享链接（只读视图下不传，则不显示分享按钮） */
   getShareUrl?: () => Promise<string>
+  /** 混量纲分组决策结果（≥2 个量纲时由 App 传入），非空时按组展示而非整体排名 */
+  groups?: UnitGroupResult[]
 }
 
 const RANK_ICON = [Crown, Medal, Award]
@@ -72,6 +75,26 @@ function shortLabel(it: ComputedSku): string {
   if (spec && spec.length <= 16) return flavor ? `${flavor}·${spec}` : spec
   return it.name.length > 16 ? it.name.slice(0, 16) + '…' : it.name
 }
+
+/** 锚点值格式化：per-feature 每元性能是普通数字；per-unit 单位价是货币 */
+function fmtAnchor(it: ComputedSku): string {
+  if (it.anchorHigherBetter) return it.anchorValue != null ? fmt.num(it.anchorValue) : '—'
+  return fmt.priceUnit(it.unitPrice)
+}
+
+/** 锚点列名：per-feature "每元电池容量"；per-unit "每g价格" */
+function anchorLabelOfItem(it: ComputedSku): string {
+  return it.anchorLabel ?? `每${it.unit}价格`
+}
+
+/** 量纲分组标题：基准单位 → 中文量纲名 */
+const BASE_UNIT_LABELS: Record<string, string> = {
+  g: '重量（g）',
+  ml: '体积（ml）',
+  cm: '长度（cm）',
+  个: '计件（个）',
+}
+const baseGroupLabel = (base: string) => BASE_UNIT_LABELS[base] ?? `单位（${base}）`
 
 /** 写剪贴板：优先 Clipboard API，非安全上下文/旧浏览器回退 execCommand */
 async function writeClipboard(text: string): Promise<void> {
@@ -171,8 +194,10 @@ function groupComputedSkus(
   return [...map.entries()].map(([key, items]) => ({ key, items }))
 }
 
-export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
+export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl, groups }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
+  // 混量纲分组模式：≥2 个基准单位（如 g 和 ml）时按组展示，整体排名不再有意义
+  const grouped = Boolean(groups && groups.length > 1)
   const chartTheme = useChartTheme()
   // 冠军规格的价格走势：跨天变过价（≥2 条记录）时才有，用于提示"现在买是不是比上次贵"
   const bestTrend = priceTrend(best?.priceHistory)
@@ -294,6 +319,18 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
       })
       .map(({ key, label }) => ({ key, label }))
   })()
+
+  // 混量纲：分组各自决策，不再渲染整体排名（分组视图自带冠军与前三）
+  if (grouped && groups) {
+    return (
+      <GroupedReport
+        groups={groups}
+        config={config}
+        unitWarning={unitWarning}
+        onBack={onBack}
+      />
+    )
+  }
 
   if (items.length === 0) {
     // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
@@ -508,9 +545,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <h2 className="text-3xl sm:text-5xl font-bold tracking-tight">{best.name}</h2>
                 <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
                   <div>
-                    <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
+                    <div className="text-sm text-slate-400 mb-0.5">{anchorLabelOfItem(best)}</div>
                     <div className="text-2xl font-bold text-brand tabular">
-                      <CountUp value={best.unitPrice} format={fmt.priceUnit} />
+                      <CountUp
+                        value={best.anchorHigherBetter ? best.anchorValue ?? 0 : best.unitPrice}
+                        format={best.anchorHigherBetter ? fmt.num : fmt.priceUnit}
+                      />
                     </div>
                   </div>
                   <div>
@@ -604,6 +644,79 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </motion.section>
       )}
 
+      {/* 性价比全景：总价 × 综合得分散点图。
+          与品类无关的通用视图 —— 越靠左上越划算（便宜且得分高），右下即"又贵又差"的坑 */}
+      {items.length >= 2 && (
+        <section className="glass rounded-2xl p-6">
+          <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
+            <Scale className="h-5 w-5 text-brand" /> 性价比全景
+          </h3>
+          <p className="text-xs text-slate-500 mb-5">
+            横轴总价 · 纵轴综合得分 · 越靠<em className="not-italic text-brand font-medium">左上角</em>越划算，
+            右下角的点是"又贵又平庸"。{items[0]?.anchorHigherBetter ? '当前按每元性能计价。' : '当前按每单位量计价。'}
+          </p>
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 24, right: 24, bottom: 8, left: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                <XAxis
+                  type="number"
+                  dataKey="price"
+                  name="总价"
+                  tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                  tickFormatter={(v) => `¥${v}`}
+                  domain={['dataMin', 'dataMax']}
+                />
+                <YAxis
+                  type="number"
+                  dataKey="score"
+                  name="综合得分"
+                  domain={[0, 100]}
+                  tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                  width={36}
+                />
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3', stroke: chartTheme.grid }}
+                  contentStyle={chartTheme.tooltipStyle}
+                  labelStyle={chartTheme.tooltipLabelStyle}
+                  itemStyle={chartTheme.tooltipItemStyle}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null
+                    const d = payload[0].payload as ComputedSku
+                    return (
+                      <div style={chartTheme.tooltipStyle} className="text-xs space-y-1">
+                        <div className="font-semibold" style={chartTheme.tooltipLabelStyle}>{d.name}</div>
+                        <div>总价 {fmt.yuan(d.price)} · 得分 {d.score.toFixed(1)}</div>
+                        <div>{anchorLabelOfItem(d)} {fmtAnchor(d)}</div>
+                      </div>
+                    )
+                  }}
+                />
+                <Scatter data={items} isAnimationActive={false}>
+                  {items.map((d) => (
+                    <Cell
+                      key={d.id}
+                      fill={d.isBest ? '#16a34a' : chartTheme.series.unitPrice}
+                      fillOpacity={d.isBest ? 1 : 0.7}
+                      r={d.isBest ? 8 : 5}
+                    />
+                  ))}
+                  <LabelList
+                    dataKey="name"
+                    position="top"
+                    style={{ fill: chartTheme.tick, fontSize: 10 }}
+                    formatter={(v: string) => (v.length > 10 ? v.slice(0, 10) + '…' : v)}
+                  />
+                </Scatter>
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="mt-3 text-xs text-slate-500 flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#16a34a]" /> 绿点为本期最划算
+          </p>
+        </section>
+      )}
+
       {/* 排名 + 边际效益：大屏左右分栏 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
       {/* 排名（支持簇化简 / 全量切换） */}
@@ -688,7 +801,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <th className="px-2 py-2 font-medium">规格</th>
                       <th className="px-2 py-2 font-medium text-right">总价</th>
                       <th className="px-2 py-2 font-medium text-right">总量</th>
-                      <th className="px-2 py-2 font-medium text-right">每{items[0]?.unit ?? ''}</th>
+                      <th className="px-2 py-2 font-medium text-right">{items[0] ? anchorLabelOfItem(items[0]) : '单价'}</th>
                       <th className="px-2 py-2 font-medium text-right">{items.some((i) => i.packs > 1) ? '每包' : '每件'}</th>
                     </tr>
                   </thead>
@@ -940,23 +1053,24 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             ))}
           </div>
 
-          {/* 避坑提示：紧贴边际分析下方，下单前看清潜在陷阱 */}
-          <div className="mt-6 pt-6 border-t border-edge/60">
-            <h4 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-400" /> 避坑提示
-            </h4>
-            <ul className="space-y-2">
-              {warnings.map((w, i) => (
-                <li key={i} className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
         </section>
       )}
       </div>
+
+      {/* 避坑提示：独立于边际分析（per-feature 计价模式下没有边际效益，提示仍要展示） */}
+      <section className="glass rounded-2xl p-6">
+        <h3 className="text-lg font-bold tracking-tight mb-3 flex items-center gap-2">
+          <AlertTriangle className="h-5 w-5 text-amber-400" /> 避坑提示
+        </h3>
+        <ul className="space-y-2">
+          {warnings.map((w, i) => (
+            <li key={i} className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
 
       {/* 多维能力雷达：簇视图取簇代表，全量视图取前 5 名 */}
       {radar && (
@@ -966,7 +1080,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </h3>
           <p className="text-xs text-slate-500 mb-5">
             {view === 'cluster' ? '每个簇取最省钱成员为代表 · ' : '展示排名前 5 的规格 · '}
-            各维度按 0-100 归一化（价格维度单价越低分越高），覆盖面积越大越全面占优
+            各维度按 0-100 归一化（价格维度{items[0]?.anchorHigherBetter ? '每元性能越高分越高' : '单价越低分越高'}），覆盖面积越大越全面占优
           </p>
           <div className="h-96">
             <ResponsiveContainer width="100%" height="100%">
@@ -1050,8 +1164,10 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
         </div>
         <div className="text-right shrink-0">
           <div className="text-base font-bold tabular">
-            <span className="text-brand">{fmt.priceUnit(cluster.repUnitPrice)}</span>
-            <span className="text-sm text-slate-500 font-normal"> /{cluster.unit}</span>
+            <span className="text-brand">{fmtAnchor(active)}</span>
+            <span className="text-sm text-slate-500 font-normal">
+              {' '}{active.anchorHigherBetter ? anchorLabelOfItem(active) : `/${cluster.unit}`}
+            </span>
           </div>
           <div className="text-sm text-slate-500">{cluster.packs > 1 ? '每包' : '每件'} {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
         </div>
@@ -1093,7 +1209,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
               className="text-sm text-slate-400 mt-2"
             >
               已选 <span className="text-brand-deep font-medium">{active.name}</span>：
-              {fmt.yuan(active.price)}，每{active.unit} {fmt.priceUnit(active.unitPrice)}
+              {fmt.yuan(active.price)}，{anchorLabelOfItem(active)} {fmtAnchor(active)}
             </motion.p>
           </AnimatePresence>
         </div>
@@ -1186,11 +1302,129 @@ function RankGroupRows({
               </td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(item.price)}</td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
-              <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(item.unitPrice)}</td>
+              <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmtAnchor(item)}</td>
               <td className="px-2 py-2.5 text-right tabular text-slate-500 dark:text-slate-300">{fmt.yuan(item.packPrice)}</td>
             </motion.tr>
           )
         })}
     </>
+  )
+}
+
+/* ============ 混量纲分组视图 ============ */
+
+/**
+ * 清单里混了不同量纲（如可乐按 ml、饼干按 g）时，整体比价没有客观答案。
+ * 按基准单位拆组，每组独立决策，各自给出冠军与排名；跨组不做比较。
+ */
+function GroupedReport({ groups, config, unitWarning, onBack }: {
+  groups: UnitGroupResult[]
+  config: DecisionConfig
+  unitWarning?: string | null
+  onBack: () => void
+}) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <button
+          onClick={onBack}
+          className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5"
+        >
+          <ArrowLeft className="h-4 w-4" /> 返回编辑
+        </button>
+      </div>
+
+      <div className="flex gap-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4">
+        <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-semibold text-amber-700 dark:text-amber-400">
+            已按单位分组，分别比价
+          </p>
+          <p className="text-xs text-amber-600 dark:text-amber-300 mt-0.5 leading-relaxed">
+            {unitWarning ?? '不同计量单位无法直接比价。'}
+            {config.category ? `（商品类型：${config.category}）` : ''}
+            跨组的"谁更划算"没有客观答案，请分别参考各组结论。
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        {groups.map((g) => {
+          const { best, items, warnings: groupWarnings } = g.result
+          return (
+            <section key={g.base} className="glass rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-base font-bold tracking-tight flex items-center gap-2">
+                  <Scale className="h-4 w-4 text-brand" /> {baseGroupLabel(g.base)}
+                </h3>
+                <span className="text-xs text-slate-500 tabular">{items.length} 个规格</span>
+              </div>
+
+              {best && (
+                <div className="rounded-xl bg-brand-soft/60 border border-brand/30 p-4">
+                  <div className="text-xs text-brand font-semibold mb-1 flex items-center gap-1">
+                    <Trophy className="h-3 w-3" /> 本组最划算
+                  </div>
+                  <div className="font-bold truncate" title={best.name}>{best.name}</div>
+                  <div className="mt-1 text-xs text-slate-500 tabular">
+                    {fmt.yuan(best.price)} · {anchorLabelOfItem(best)} {fmtAnchor(best)} · 得分 {best.score.toFixed(1)}
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs min-w-[380px]">
+                  <thead>
+                    <tr className="border-b border-edge text-left text-slate-500">
+                      <th className="px-2 py-1.5 font-medium text-center w-8">#</th>
+                      <th className="px-2 py-1.5 font-medium">规格</th>
+                      <th className="px-2 py-1.5 font-medium text-right">总价</th>
+                      <th className="px-2 py-1.5 font-medium text-right">
+                        {items[0] ? anchorLabelOfItem(items[0]) : '单价'}
+                      </th>
+                      <th className="px-2 py-1.5 font-medium text-right">得分</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.slice(0, 5).map((it) => (
+                      <tr key={it.id} className={`border-b border-edge/50 ${it.isBest ? 'bg-brand/5' : ''}`}>
+                        <td className="px-2 py-2 text-center tabular text-slate-500">{it.rank}</td>
+                        <td className="px-2 py-2">
+                          <span className="font-medium truncate inline-block max-w-[160px] align-middle" title={it.name}>
+                            {it.name}
+                          </span>
+                          {it.isBest && (
+                            <span className="ml-1.5 px-1.5 py-0.5 rounded bg-brand/15 text-brand text-[10px] font-semibold">
+                              推荐
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-2 text-right tabular text-brand-deep">{fmt.yuan(it.price)}</td>
+                        <td className="px-2 py-2 text-right tabular font-semibold text-brand">{fmtAnchor(it)}</td>
+                        <td className="px-2 py-2 text-right tabular text-slate-500">{it.score.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {items.length > 5 && (
+                  <p className="mt-1.5 text-[11px] text-slate-500">仅展示前 5 名，共 {items.length} 个</p>
+                )}
+              </div>
+
+              {groupWarnings.length > 0 && (
+                <ul className="space-y-1.5">
+                  {groupWarnings.slice(0, 2).map((w, i) => (
+                    <li key={i} className="flex gap-1.5 text-[11px] text-amber-600 dark:text-amber-300 leading-relaxed">
+                      <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                      {w}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )
+        })}
+      </div>
+    </div>
   )
 }

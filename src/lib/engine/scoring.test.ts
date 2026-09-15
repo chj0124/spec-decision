@@ -5,6 +5,7 @@ import {
   marginAnalysis,
   mergeVariantSkus,
   buildWarnings,
+  anchorOf,
 } from './scoring'
 import { decide } from './decide'
 import { rankByPreference } from './clusters'
@@ -25,6 +26,8 @@ const cfg = (over: Partial<DecisionConfig> = {}): DecisionConfig => ({
   priceWeight: over.priceWeight ?? 50,
   preference: over.preference ?? 'score',
   ...(over.budget !== undefined ? { budget: over.budget } : {}),
+  ...(over.mode !== undefined ? { mode: over.mode } : {}),
+  ...(over.primaryDimId !== undefined ? { primaryDimId: over.primaryDimId } : {}),
 })
 
 describe('computeSku 派生值', () => {
@@ -206,5 +209,76 @@ describe('buildWarnings 避坑提示', () => {
     const pricey = computeSku(sku({ id: 'p', name: '刺客', price: 50, quantity: 100, packs: 1 }))
     const tips = buildWarnings([cheap, pricey])
     expect(tips.join('')).toContain('刺客')
+  })
+})
+
+describe('per-feature 计价模式（每元性能）', () => {
+  const batteryDim: ParamDim = {
+    id: 'battery', label: '电池容量', type: 'higher-better', weight: 20, unit: 'mAh',
+  }
+  const phoneCfg = (over: Partial<DecisionConfig> = {}) =>
+    cfg({ dims: [batteryDim], mode: 'per-feature', primaryDimId: 'battery', ...over })
+  const phone = (id: string, price: number, battery?: number): Sku =>
+    sku({
+      id, name: id, price, quantity: 1, unit: '个', packs: 1,
+      ...(battery !== undefined ? { params: { battery } } : {}),
+    })
+
+  it('anchorOf = 主参数 ÷ 总价（每元性能）', () => {
+    const c = computeSku(phone('a', 2000, 5000))
+    expect(anchorOf(c, phoneCfg())).toBeCloseTo(2.5)
+    // per-unit 模式下锚点仍是单价
+    expect(anchorOf(c, cfg())).toBeCloseTo(2000)
+  })
+
+  it('价格分按每元性能越高越高（而非单价越低越高）', () => {
+    const a = computeSku(phone('a', 2000, 6000)) // 3 mAh/元
+    const b = computeSku(phone('b', 3000, 6000)) // 2 mAh/元
+    const [sa, sb] = scoreItems([a, b], phoneCfg({ priceWeight: 50 }))
+    expect(sa.dimScores?.price).toBe(100)
+    expect(sb.dimScores?.price).toBe(0)
+  })
+
+  it('缺主参数值的条目价格分给中性 50', () => {
+    const a = computeSku(phone('a', 2000, 6000))
+    const noParam = computeSku(phone('c', 2500))
+    const scored = scoreItems([a, noParam], phoneCfg({ priceWeight: 50 }))
+    expect(scored[1].dimScores?.price).toBe(50)
+  })
+
+  it("preference='value' 按每元性能降序，best 带锚点字段", () => {
+    const r = decide(
+      [phone('a', 3000, 6000), phone('b', 2000, 5000)],
+      phoneCfg({ preference: 'value' }),
+    )
+    expect(r.items[0].id).toBe('b') // 2.5 > 2 mAh/元
+    expect(r.best?.anchorHigherBetter).toBe(true)
+    expect(r.best?.anchorLabel).toBe('每元电池容量')
+    expect(r.best?.anchorValue).toBeCloseTo(2.5)
+  })
+
+  it('耐用品不产生边际效益分析', () => {
+    const r = decide([phone('a', 2000, 5000), phone('b', 3000, 6000)], phoneCfg())
+    expect(r.margins).toEqual([])
+  })
+
+  it('baseline 为每元性能最高者', () => {
+    const r = decide([phone('a', 2000, 4000), phone('b', 2500, 6000)], phoneCfg())
+    expect(r.baseline?.id).toBe('b') // 2.4 > 2
+  })
+
+  it('主参数全缺时退化为单价比价，不卡死', () => {
+    const a = sku({ id: 'a', price: 10, quantity: 100, packs: 1 })
+    const b = sku({ id: 'b', price: 20, quantity: 100, packs: 1 })
+    const r = decide([a, b], phoneCfg({ preference: 'value' }))
+    expect(r.items[0].id).toBe('a')
+  })
+
+  it('每元性能悬殊时给出智商税提示', () => {
+    const r = decide(
+      [phone('a', 1000, 6000), phone('b', 4000, 5000)],
+      phoneCfg({ preference: 'value' }),
+    )
+    expect(r.warnings.join('')).toContain('每元电池容量')
   })
 })

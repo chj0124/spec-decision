@@ -15,7 +15,7 @@ import type { AiConfig } from './lib/ai'
 import { UNDO_TTL_MS, captureDelete, captureImport, removeScenario, applyUndo } from './lib/undo'
 import type { UndoSlot } from './lib/undo'
 import { useUnitNormalize } from './lib/useUnitNormalize'
-import { unitMixWarning } from './lib/engine'
+import { unitMixWarning, splitByBaseUnit } from './lib/engine'
 import Workbench from './components/Workbench'
 import AiSettings from './components/AiSettings'
 import ScenarioBar from './components/ScenarioBar'
@@ -222,6 +222,12 @@ export default function App() {
     () => decide(normalizedSkus, config),
     [normalizedSkus, config],
   )
+  // 混量纲清单（如同时有 g 和 ml）无法直接比价：按基准单位拆组，每组独立跑决策
+  const groupResults = useMemo(() => {
+    const groups = splitByBaseUnit(normalizedSkus)
+    if (groups.length < 2) return undefined
+    return groups.map((g) => ({ base: g.base, result: decide(g.skus, config) }))
+  }, [normalizedSkus, config])
   const aiReady = isAiReady()
   const visionReady = isVisionReady()
 
@@ -484,6 +490,7 @@ export default function App() {
                 result={result}
                 config={config}
                 unitWarning={unitMixWarning(normalizedSkus)}
+                groups={groupResults}
                 onBack={handleBack}
                 onPreferenceChange={handlePreferenceChange}
                 onBudgetChange={handleBudgetChange}

@@ -19,7 +19,9 @@ export {
   isKnownUnit,
   aiNormalizeUnit,
   unitMixWarning,
+  splitByBaseUnit,
 } from './units'
+export type { UnitGroup } from './units'
 
 export { parseFlavor, groupSkus, parseSpec, buildSpec, SPEC_PATTERN } from './spec'
 export type { GroupBy, SpecParts } from './spec'
@@ -41,6 +43,10 @@ export {
   buildReasons,
   inferFlavorLabel,
   mergeVariantSkus,
+  anchorOf,
+  anchorHigherBetter,
+  anchorLabelOf,
+  compareAnchorDesc,
 } from './scoring'
 
 export { clusterItems, rankByPreference } from './clusters'

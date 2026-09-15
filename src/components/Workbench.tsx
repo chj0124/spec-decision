@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint } from '../lib/types'
+import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint, CategoryMode } from '../lib/types'
 import { uid, fmt, isStale, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImages, toSku } from '../lib/recognize'
@@ -8,6 +8,7 @@ import { parseQuickEntry, quickEntryToSku, quickEntryUnitPrice } from '../lib/qu
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
+import { matchCategoryPreset } from '../lib/categoryPresets'
 import RecognizeReview from './RecognizeReview'
 import WeightPie from './WeightPie'
 import {
@@ -511,7 +512,33 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     const nextFlavorLabel = mode === 'replace' || !config.flavorLabel
       ? review?.flavorLabel ?? config.flavorLabel
       : config.flavorLabel
-    onConfigChange({ ...config, dims: mergedDims, category: nextCategory, flavorLabel: nextFlavorLabel })
+    // 品类模板：识别出的商品类型命中模板时，自动设定计价模式与主性能维度。
+    // 仅在替换模式或尚未设置过模式时套用，避免追加导入打乱用户手调的配置。
+    let nextMode: CategoryMode | undefined = config.mode
+    let nextPrimaryDimId: string | undefined = config.primaryDimId
+    const preset = matchCategoryPreset(nextCategory)
+    if (preset && (mode === 'replace' || !config.mode)) {
+      nextMode = preset.mode
+      if (preset.mode === 'per-feature') {
+        const hit = preset.primaryDimLabels
+          ? mergedDims.find((d) =>
+              isNumericType(d.type) &&
+              preset.primaryDimLabels!.some((p) => d.label.includes(p) || p.includes(d.label)),
+            )
+          : undefined
+        nextPrimaryDimId = hit?.id
+      } else {
+        nextPrimaryDimId = undefined
+      }
+    }
+    onConfigChange({
+      ...config,
+      dims: mergedDims,
+      category: nextCategory,
+      flavorLabel: nextFlavorLabel,
+      mode: nextMode,
+      primaryDimId: nextPrimaryDimId,
+    })
     const newSkus = items.map((r) => toSku(r, labelToId))
     onChange(mode === 'replace' ? newSkus : [...skus, ...newSkus])
     setReview(null)
@@ -960,15 +987,77 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
               <div className="flex flex-col lg:flex-row gap-4 p-4">
                 {/* 左：维度列表 */}
                 <div className="flex-1 space-y-2 min-w-0 overflow-x-auto">
+                  {/* 计价模式：消耗品按单位量（每 g/ml），耐用品按每元性能（如手机比每元电池容量） */}
+                  <div className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-edge/60 bg-panel/40">
+                    <span className="text-xs font-semibold text-slate-600">计价模式</span>
+                    <div className="flex rounded-lg border border-edge overflow-hidden text-xs">
+                      {([
+                        { key: 'per-unit', label: '按量计价' },
+                        { key: 'per-feature', label: '按性能计价' },
+                      ] as { key: CategoryMode; label: string }[]).map((opt) => (
+                        <button
+                          key={opt.key}
+                          onClick={() =>
+                            onConfigChange({
+                              ...config,
+                              mode: opt.key,
+                              primaryDimId: opt.key === 'per-feature' ? config.primaryDimId : undefined,
+                            })
+                          }
+                          title={opt.key === 'per-unit'
+                            ? '消耗品（饮料/零食/纸巾）：比每 g/ml/个 多少钱'
+                            : '耐用品（手机/家电）：比每元钱买多少性能'}
+                          className={`px-2.5 py-1 font-medium transition-colors ${
+                            (config.mode ?? 'per-unit') === opt.key
+                              ? 'bg-brand/15 text-brand'
+                              : 'text-slate-400 hover:text-brand-deep'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    {config.mode === 'per-feature' && (
+                      <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                        主参数
+                        <select
+                          value={config.primaryDimId ?? ''}
+                          onChange={(e) =>
+                            onConfigChange({
+                              ...config,
+                              primaryDimId: e.target.value || undefined,
+                            })
+                          }
+                          className="field py-1 text-xs min-w-[96px]"
+                          title="每元性能 = 该维度值 ÷ 总价，如每元电池容量（mAh/元）"
+                        >
+                          <option value="">选择数值维度…</option>
+                          {config.dims.filter((d) => isNumericType(d.type)).map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.label}{d.unit ? `（${d.unit}）` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {config.mode === 'per-feature' && !config.primaryDimId && (
+                      <span className="text-[11px] text-amber-500">
+                        请先添加数值型维度并选为主参数，否则仍按单位价比价
+                      </span>
+                    )}
+                  </div>
+
                   {/* 价格维度（内置，不可删除） */}
                   <div className="flex items-center gap-2 p-2 rounded-lg bg-brand-soft/30 border border-edge">
                     <span className="text-xs font-mono text-slate-500 w-6">价格</span>
                     <input
-                      value="每单位价格"
+                      value={config.mode === 'per-feature' && config.primaryDimId ? '每元性能' : '每单位价格'}
                       disabled
                       className="field py-1.5 text-xs flex-1 opacity-70"
                     />
-                    <span className="text-xs text-slate-500 w-16 text-center">越小越好</span>
+                    <span className="text-xs text-slate-500 w-16 text-center">
+                      {config.mode === 'per-feature' && config.primaryDimId ? '越大越好' : '越小越好'}
+                    </span>
                     <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                       {WEIGHT_TIERS.map((t) => (
                         <button

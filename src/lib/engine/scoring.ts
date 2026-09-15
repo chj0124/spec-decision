@@ -39,6 +39,56 @@ export function computeSku(s: Sku): ComputedSku {
   }
 }
 
+/* ============ 性价比锚点（per-unit / per-feature 两种计价范式的统一抽象） ============ */
+
+/** 当前配置是否处于「每元性能」模式（越高越好） */
+export function anchorHigherBetter(config: DecisionConfig): boolean {
+  return config.mode === 'per-feature' && Boolean(config.primaryDimId)
+}
+
+/**
+ * 性价比锚点值：
+ * - per-unit    → 每单位价格（越低越好）
+ * - per-feature → 主参数 ÷ 总价（每元性能，越高越好）；缺主参数值时返回 null
+ */
+export function anchorOf(item: ComputedSku, config: DecisionConfig): number | null {
+  if (anchorHigherBetter(config)) {
+    const v = item.params?.[config.primaryDimId!]
+    if (typeof v === 'number' && v > 0 && item.price > 0) return round(v / item.price, 6)
+    return null
+  }
+  return item.unitPrice > 0 ? item.unitPrice : null
+}
+
+/** 锚点展示标签：per-unit "每g价格"；per-feature "每元电池容量" */
+export function anchorLabelOf(config: DecisionConfig, unit: string): string {
+  if (anchorHigherBetter(config)) {
+    const label = config.dims.find((d) => d.id === config.primaryDimId)?.label ?? '性能'
+    return `每元${label}`
+  }
+  return `每${unit}价格`
+}
+
+/** 主性能维度名（per-feature 文案用） */
+function primaryDimLabel(config: DecisionConfig): string {
+  return config.dims.find((d) => d.id === config.primaryDimId)?.label ?? '性能'
+}
+
+/**
+ * 锚点降序比较器：每元性能高的排前；缺锚点的排最后；
+ * 双方都缺时回退单价升序（避免 -Infinity - -Infinity = NaN 导致排序结果不可预期）。
+ */
+export function compareAnchorDesc(config: DecisionConfig) {
+  return (a: ComputedSku, b: ComputedSku): number => {
+    const av = anchorOf(a, config)
+    const bv = anchorOf(b, config)
+    if (av == null && bv == null) return a.unitPrice - b.unitPrice
+    if (av == null) return 1
+    if (bv == null) return -1
+    return bv - av
+  }
+}
+
 /* ============ 多维度加权评分 ============ */
 
 /** 把单个维度的原始取值归一化到 0-100 分 */
@@ -83,10 +133,17 @@ export function scoreItems(
 ): ComputedSku[] {
   if (items.length === 0) return items
 
-  // 价格维度范围
-  const prices = items.map((i) => i.unitPrice).filter((p) => p > 0)
-  const minP = Math.min(...prices)
-  const maxP = Math.max(...prices)
+  // 价格维度范围：以锚点为准（per-unit=单价，per-feature=每元性能）。
+  // per-feature 下若没有任何主参数值，锚点全空 → 整条口径退化为单价（绝不卡死）。
+  let anchors = items.map((i) => anchorOf(i, config))
+  let validAnchors = anchors.filter((v): v is number => v != null)
+  const higherBetter = anchorHigherBetter(config) && validAnchors.length > 0
+  if (anchorHigherBetter(config) && validAnchors.length === 0) {
+    anchors = items.map((i) => (i.unitPrice > 0 ? i.unitPrice : null))
+    validAnchors = anchors.filter((v): v is number => v != null)
+  }
+  const minP = validAnchors.length > 0 ? Math.min(...validAnchors) : 0
+  const maxP = validAnchors.length > 0 ? Math.max(...validAnchors) : 0
   const priceRange = maxP - minP || 1
 
   // 各数值维度的取值范围（text 类型用索引范围）
@@ -116,11 +173,20 @@ export function scoreItems(
     Math.max(0, config.priceWeight) +
     config.dims.reduce((s, d) => s + Math.max(0, d.weight), 0) || 1
 
-  return items.map((i) => {
+  return items.map((i, idx) => {
     const dimScores: Record<string, number> = {}
 
-    // 价格分（0-100，越低越高）
-    const priceScore = i.unitPrice > 0 ? ((maxP - i.unitPrice) / priceRange) * 100 : 0
+    // 价格分（0-100）：per-unit 单价越低越高；per-feature 每元性能越高越高，
+    // per-feature 下缺主参数值的条目给中性 50 分（不奖励也不惩罚数据缺失）
+    const a = anchors[idx]
+    const priceScore =
+      a == null
+        ? higherBetter
+          ? 50
+          : 0
+        : higherBetter
+          ? ((a - minP) / priceRange) * 100
+          : ((maxP - a) / priceRange) * 100
     dimScores['price'] = round(priceScore, 2)
 
     let weightedSum = priceScore * (Math.max(0, config.priceWeight) / totalW)
@@ -248,9 +314,34 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
 /* ============ 提示与结论文案 ============ */
 
 /** 生成避坑提示 */
-export function buildWarnings(items: ComputedSku[]): string[] {
+export function buildWarnings(items: ComputedSku[], config?: DecisionConfig): string[] {
   const tips: string[] = []
   if (items.length < 2) return tips
+
+  // per-feature：耐用品没有"囤货/加价不加量"概念，只检测每元性能悬殊的智商税
+  if (config && anchorHigherBetter(config)) {
+    const label = primaryDimLabel(config)
+    const withAnchor = items
+      .map((i) => ({ i, a: anchorOf(i, config) }))
+      .filter((x): x is { i: ComputedSku; a: number } => x.a != null)
+    if (withAnchor.length >= 2) {
+      const byAnchor = [...withAnchor].sort((x, y) => y.a - x.a)
+      const top = byAnchor[0]
+      const bottom = byAnchor[byAnchor.length - 1]
+      if (top.a > bottom.a * 1.5) {
+        tips.push(
+          `「${bottom.i.name}」每元${label}仅为「${top.i.name}」的 ${(
+            (bottom.a / top.a) * 100
+          ).toFixed(0)}%，除非有特殊需求，否则性价比明显偏低。`,
+        )
+      }
+    }
+    if (tips.length === 0) {
+      tips.push('各选项每元性能差距不大，按预算与个人偏好选择即可。')
+    }
+    return tips
+  }
+
   const byPrice = [...items].sort((a, b) => a.unitPrice - b.unitPrice)
   const cheapest = byPrice[0]
   const priciest = byPrice[byPrice.length - 1]
@@ -293,21 +384,47 @@ export function buildWarnings(items: ComputedSku[]): string[] {
 }
 
 /** 推荐理由 */
-export function buildReasons(best: ComputedSku, items: ComputedSku[]): string[] {
+export function buildReasons(
+  best: ComputedSku,
+  items: ComputedSku[],
+  config?: DecisionConfig,
+): string[] {
   const reasons: string[] = []
   const others = items.filter((i) => i.id !== best.id)
   reasons.push(
     `综合得分 ${best.score.toFixed(1)} 分，在 ${items.length} 个规格中排名第一。`,
   )
-  reasons.push(
-    `每${best.unit}仅 ${fmt.priceUnit(best.unitPrice)}（总量 ${best.totalQuantity}${best.unit}），单位成本最低。`,
-  )
-  if (others.length > 0) {
-    const avgOthers =
-      others.reduce((s, i) => s + i.unitPrice, 0) / others.length
-    const savePct = ((avgOthers - best.unitPrice) / avgOthers) * 100
-    if (savePct > 0) {
-      reasons.push(`相比其他规格平均单价，再省 ${savePct.toFixed(1)}%。`)
+
+  // per-feature：推荐理由围绕"每元性能"展开
+  if (config && anchorHigherBetter(config)) {
+    const label = primaryDimLabel(config)
+    const bestAnchor = anchorOf(best, config)
+    if (bestAnchor != null) {
+      reasons.push(`每元可换 ${fmt.num(bestAnchor)}（每元${label}全场最高）。`)
+      const otherAnchors = others
+        .map((o) => anchorOf(o, config))
+        .filter((v): v is number => v != null)
+      if (otherAnchors.length > 0) {
+        const avg = otherAnchors.reduce((s, v) => s + v, 0) / otherAnchors.length
+        const betterPct = (bestAnchor / avg - 1) * 100
+        if (betterPct > 0) {
+          reasons.push(`每元${label}比其余规格平均水平高 ${betterPct.toFixed(1)}%。`)
+        }
+      }
+    } else {
+      reasons.push(`总价 ${fmt.yuan(best.price)}，在预算与性能之间最均衡。`)
+    }
+  } else {
+    reasons.push(
+      `每${best.unit}仅 ${fmt.priceUnit(best.unitPrice)}（总量 ${best.totalQuantity}${best.unit}），单位成本最低。`,
+    )
+    if (others.length > 0) {
+      const avgOthers =
+        others.reduce((s, i) => s + i.unitPrice, 0) / others.length
+      const savePct = ((avgOthers - best.unitPrice) / avgOthers) * 100
+      if (savePct > 0) {
+        reasons.push(`相比其他规格平均单价，再省 ${savePct.toFixed(1)}%。`)
+      }
     }
   }
   if (best.bonusValue && best.bonusLabel) {

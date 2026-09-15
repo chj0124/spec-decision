@@ -96,17 +96,34 @@ export async function aiNormalizeUnit(
   }
 }
 
-/** 检测一批 SKU 是否存在"基准单位不一致、无法直接比价"的情况，返回警告文案或 null */
-export function unitMixWarning(skus: Sku[]): string | null {
-  const bases = new Set<string>()
+/** 量纲分组：按归一化后的基准单位（g/ml/cm/个）把 SKU 拆成可独立比价的小组 */
+export interface UnitGroup {
+  base: string
+  skus: Sku[]
+}
+
+/**
+ * 把混量纲清单拆成同量纲分组（quantity<=0 的残项忽略）。
+ * 单一量纲时返回 1 组，调用方据此判断是否需要分组对比。
+ */
+export function splitByBaseUnit(skus: Sku[]): UnitGroup[] {
+  const map = new Map<string, Sku[]>()
   for (const s of skus) {
     if (!(s.quantity > 0)) continue
-    bases.add(normalizeUnit(s.quantity, s.unit).base || s.unit)
+    const base = normalizeUnit(s.quantity, s.unit).base || s.unit
+    if (!map.has(base)) map.set(base, [])
+    map.get(base)!.push(s)
   }
+  return [...map.entries()].map(([base, groupSkus]) => ({ base, skus: groupSkus }))
+}
+
+/** 检测一批 SKU 是否存在"基准单位不一致、无法直接比价"的情况，返回警告文案或 null */
+export function unitMixWarning(skus: Sku[]): string | null {
+  const groups = splitByBaseUnit(skus)
   // 同一物理量纲的基准才可比；g/ml/cm/个 属不同量纲，出现多个且非同一类 → 警告
-  const arr = [...bases]
-  if (arr.length > 1) {
-    return `检测到多种计量单位（${arr.join('、')}），它们属于不同维度，无法直接比价。请统一为同一单位后再看结果。`
+  if (groups.length > 1) {
+    const arr = groups.map((g) => g.base)
+    return `检测到多种计量单位（${arr.join('、')}），它们属于不同维度，无法直接比价。已按单位分组分别给出结论。`
   }
   return null
 }

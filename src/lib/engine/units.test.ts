@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeUnit, isKnownUnit, unitMixWarning } from './units'
+import { normalizeUnit, isKnownUnit, unitMixWarning, splitByBaseUnit } from './units'
 import type { Sku } from '../types'
 
 const sku = (quantity: number, unit: string): Sku => ({
@@ -95,5 +95,30 @@ describe('unitMixWarning 混单位检测', () => {
   it('单个量纲或空列表不告警', () => {
     expect(unitMixWarning([sku(100, 'g'), sku(200, 'g')])).toBeNull()
     expect(unitMixWarning([])).toBeNull()
+  })
+
+  it('混量纲时提示已分组分别比价', () => {
+    const w = unitMixWarning([sku(100, 'g'), sku(100, 'ml')])
+    expect(w).toContain('分组')
+  })
+})
+
+describe('splitByBaseUnit 量纲分组', () => {
+  it('同量纲归一后并为一组（g 与 kg 同组）', () => {
+    const groups = splitByBaseUnit([sku(100, 'g'), sku(0.5, 'kg')])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].base).toBe('g')
+    expect(groups[0].skus).toHaveLength(2)
+  })
+
+  it('跨量纲拆成多组（g / ml / 个 各一组）', () => {
+    const groups = splitByBaseUnit([sku(100, 'g'), sku(500, 'ml'), sku(2, '个'), sku(1, 'L')])
+    expect(groups.map((g) => g.base).sort()).toEqual(['g', 'ml', '个'])
+    expect(groups.find((g) => g.base === 'ml')?.skus).toHaveLength(2)
+  })
+
+  it('quantity<=0 的残项不进任何组；空列表返回空', () => {
+    expect(splitByBaseUnit([sku(0, 'ml'), sku(100, 'g')])).toHaveLength(1)
+    expect(splitByBaseUnit([])).toEqual([])
   })
 })

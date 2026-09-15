@@ -1,5 +1,6 @@
-import type { ComputedSku, ParamValue, Preference, SkuCluster } from '../types'
+import type { ComputedSku, DecisionConfig, ParamValue, Preference, SkuCluster } from '../types'
 import { round, fmt } from './util'
+import { anchorHigherBetter, compareAnchorDesc } from './scoring'
 
 /**
  * 把「quantity × packs × unit 相同、且参数维度也相同」的规格归为一簇——
@@ -58,19 +59,28 @@ export function clusterItems(items: ComputedSku[]): SkuCluster[] {
     .map((c, idx) => ({ ...c, rank: idx + 1, isBest: idx === 0 }))
 }
 
-/** 按决策偏好排序，返回带 rank/isBest 的列表 */
+/**
+ * 按决策偏好排序，返回带 rank/isBest 的列表。
+ * 传入 config 时「性价比优先」按锚点排序：per-unit 单价低优先；per-feature 每元性能高优先。
+ */
 export function rankByPreference(
   scored: ComputedSku[],
   preference: Preference,
   budget?: number,
+  config?: DecisionConfig,
 ): ComputedSku[] {
   let pool = scored
   if (preference === 'budget' && typeof budget === 'number' && budget > 0) {
     pool = scored.filter((i) => i.price <= budget!)
   }
+  // 性价比优先的比较器：默认单价升序；per-feature 模式下每元性能降序（缺锚点的排最后）
+  const valueCmp: (a: ComputedSku, b: ComputedSku) => number =
+    config && anchorHigherBetter(config)
+      ? compareAnchorDesc(config)
+      : (a, b) => a.unitPrice - b.unitPrice
   const cmp =
     preference === 'value'
-      ? (a: ComputedSku, b: ComputedSku) => a.unitPrice - b.unitPrice // 性价比优先
+      ? valueCmp
       : (a: ComputedSku, b: ComputedSku) => b.score - a.score // 综合/预算优先均按 score
   return [...pool].sort(cmp).map((item, idx) => ({
     ...item,
