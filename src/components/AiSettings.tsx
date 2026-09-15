@@ -98,12 +98,15 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed inset-x-4 top-[8vh] sm:inset-x-0 sm:mx-auto sm:max-w-lg z-50 glass rounded-2xl p-6 max-h-[84vh] overflow-y-auto"
+            className="fixed inset-x-4 top-[8vh] sm:inset-x-0 sm:mx-auto sm:max-w-lg z-50 glass rounded-lg p-6 max-h-[84vh] overflow-y-auto"
           >
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-lg font-bold tracking-tight flex items-center gap-2">
-                <Settings className="h-5 w-5 text-brand" /> AI 服务配置
-              </h3>
+              <div>
+                <h3 className="panel-title text-base">
+                  <Settings className="h-4 w-4 text-brand" /> AI 服务配置
+                </h3>
+                <p className="panel-sub mt-1 pl-[11px]">AI PROVIDER SETUP</p>
+              </div>
               <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="关闭">
                 <X className="h-5 w-5" />
               </button>
@@ -289,7 +292,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
               </button>
               <button
                 onClick={save}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm hover:shadow-glow active:scale-[0.98] transition-all"
+                className="flex-1 px-4 py-2.5 rounded-lg bg-brand text-white dark:text-ink font-bold text-sm hover:shadow-glow active:scale-[0.98] transition-all"
               >
                 保存配置
               </button>

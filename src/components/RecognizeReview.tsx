@@ -188,7 +188,7 @@ export default function RecognizeReview({
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glass rounded-3xl p-5 sm:p-6 space-y-5"
+      className="glass rounded-lg corner-brackets p-5 sm:p-6 space-y-5"
     >
       {/* 头部 */}
       <div className="flex flex-col sm:flex-row gap-4 sm:items-start">
@@ -551,7 +551,7 @@ export default function RecognizeReview({
               onClick={() => onConfirm(valid, dimRows, existingCount > 0 ? 'replace' : 'append')}
               disabled={valid.length === 0}
               title={existingCount > 0 ? `清空现有 ${existingCount} 条规格，用识别结果替换` : undefined}
-              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
+              className="flex-1 sm:flex-none px-5 py-2.5 rounded-lg bg-brand text-white dark:text-ink font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
             >
               <CheckCheck className="h-4 w-4" />
               {existingCount > 0 ? `替换导入 ${valid.length} 条` : `确认导入 ${valid.length} 条`}

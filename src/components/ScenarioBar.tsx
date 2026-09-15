@@ -64,10 +64,10 @@ export default function ScenarioBar({
   const editing = editingId !== null || creating
 
   return (
-    <div className="glass rounded-2xl px-2.5 py-2 flex items-center gap-2 overflow-hidden">
-      <span className="text-xs text-slate-500 shrink-0 inline-flex items-center gap-1.5 pl-1">
-        <FolderOpen className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">清单</span>
+    <div className="glass rounded-lg px-2.5 py-2 flex items-center gap-2 overflow-hidden">
+      <span className="shrink-0 inline-flex items-center gap-1.5 pl-1 panel-sub">
+        <FolderOpen className="h-3.5 w-3.5 text-brand" />
+        <span className="hidden sm:inline">清单 SCENARIOS</span>
       </span>
 
       <div className="flex items-center gap-1.5 overflow-x-auto flex-1 py-0.5">
@@ -124,8 +124,8 @@ export default function ScenarioBar({
               key={s.id}
               className={`group shrink-0 flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-all ${
                 isActive
-                  ? 'border-brand bg-brand text-white shadow-glow'
-                  : 'border-edge text-slate-500 hover:border-brand/50 hover:text-brand-deep'
+                  ? 'border-brand bg-brand text-white dark:text-ink shadow-glow'
+                  : 'border-edge text-lo hover:border-brand/50 hover:text-brand-deep'
               }`}
             >
               <button
@@ -135,12 +135,12 @@ export default function ScenarioBar({
               >
                 {s.name}
               </button>
-              <span className={`tabular text-[10px] ${isActive ? 'text-white/70' : 'text-slate-400'}`}>
+              <span className={`tabular text-[10px] ${isActive ? 'text-white/70 dark:text-ink/70' : 'text-lo'}`}>
                 {s.count}
               </span>
               {/* 只在激活项上露出"多久没动过"：非激活项空间太挤，精确时间放在 hover 的 title 里 */}
               {isActive && (
-                <span className="tabular text-[10px] text-white/60 whitespace-nowrap">
+                <span className="tabular text-[10px] text-white/60 dark:text-ink/60 whitespace-nowrap">
                   {fmt.ago(s.updatedAt)}
                 </span>
               )}
@@ -148,7 +148,7 @@ export default function ScenarioBar({
                 <>
                   <button
                     onClick={() => startRename(s.id, s.name)}
-                    className="text-white/70 hover:text-white transition-colors"
+                    className="text-white/70 dark:text-ink/70 hover:text-white dark:hover:text-ink transition-colors"
                     aria-label="重命名清单"
                     title="重命名"
                   >
@@ -157,7 +157,7 @@ export default function ScenarioBar({
                   {scenarios.length > 1 && (
                     <button
                       onClick={() => setConfirmId(s.id)}
-                      className="text-white/70 hover:text-white transition-colors"
+                      className="text-white/70 dark:text-ink/70 hover:text-white dark:hover:text-ink transition-colors"
                       aria-label="删除清单"
                       title="删除该清单"
                     >

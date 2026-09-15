@@ -44,7 +44,13 @@ export default function App() {
   })
   const [page, setPage] = useState<Page>('workbench')
   const [workspace, setWorkspace] = useState<Workspace>(boot)
-  const [theme, setTheme] = useState<Theme>(() => loadTheme())
+  // 新视觉以暗色为主战场：从未显式选过主题的用户默认暗色；已选择过的（localStorage 有值）尊重原选择
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      if (localStorage.getItem('spec-decision:theme') === null) return 'dark'
+    } catch { /* 存储被禁用时按 loadTheme 的兜底走 */ }
+    return loadTheme()
+  })
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => loadAiConfig())
   const [settingsOpen, setSettingsOpen] = useState(false)
   /** 非空表示正在查看通过链接打开的报告（只读分享视图，不写入本地清单） */
@@ -76,7 +82,7 @@ export default function App() {
     // 让移动端状态栏配色跟随应用内主题（而非系统偏好），与页面底色一致
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'dark' ? '#16161b' : '#f6f5f0')
+      ?.setAttribute('content', theme === 'dark' ? '#050A14' : '#F4F7FA')
   }, [theme])
 
   // 打开带 #r= 的分享链接时，解码后进入只读报告视图
@@ -237,34 +243,46 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] grid-texture">
-      {/* 顶部导航 */}
+      {/* 顶部指挥舱标题栏：中文大标题 + 英文小号大写副标题 + 实时状态位 */}
       <header className="sticky top-0 z-40 glass border-x-0 border-t-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-brand to-violet-500 grid place-items-center shadow-glow shrink-0">
-              <LineChart className="h-5 w-5 text-white" strokeWidth={2.5} />
+            <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-brand to-brand-strong grid place-items-center shadow-glow shrink-0">
+              <LineChart className="h-5 w-5 text-white dark:text-ink" strokeWidth={2.5} />
             </div>
             <div className="min-w-0">
-              <h1 className="font-bold text-base sm:text-lg tracking-tight truncate">
+              <h1 className="font-bold text-base sm:text-lg tracking-tight truncate text-hi">
                 规格决策台
               </h1>
-              <p className="text-xs text-slate-500 hidden sm:block truncate">
-                {shared ? '只读分享报告' : `${active.name} · 多 SKU 比价`}
+              <p className="panel-sub hidden sm:block truncate">
+                SPEC DECISION CONSOLE
               </p>
             </div>
+            {/* 实时状态位：AI 就绪 / 纯本地模式 */}
+            <span className="hidden md:inline-flex items-center gap-1.5 rounded-full border border-edge bg-panel2 px-2.5 py-1 panel-sub shrink-0">
+              <span
+                className={`h-1.5 w-1.5 rounded-full animate-pulse ${
+                  visionReady ? 'bg-pos' : aiReady ? 'bg-warn' : 'bg-lo'
+                }`}
+              />
+              {visionReady ? 'AI READY' : aiReady ? 'AI TEXT ONLY' : 'LOCAL MODE'}
+            </span>
+            <span className="hidden lg:inline text-xs text-lo truncate">
+              {shared ? '只读分享报告' : active.name}
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
             {/* 页面切换：分段控件，激活项实心填充 */}
-            <nav className="flex rounded-xl border border-edge bg-panel/70 p-1 gap-1">
+            <nav className="flex rounded-lg border border-edge bg-panel2 p-1 gap-1">
               <button
                 onClick={() => setPage('workbench')}
                 disabled={Boolean(shared)}
                 aria-label="工作台"
-                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
+                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'workbench'
-                    ? 'bg-brand text-white shadow-glow'
-                    : 'text-slate-500 hover:text-brand-deep hover:bg-brand-soft/60'
+                    ? 'bg-brand text-white dark:text-ink shadow-glow'
+                    : 'text-lo hover:text-brand-deep hover:bg-brand-soft/60'
                 }`}
               >
                 <PencilLine className="h-4 w-4" />
@@ -274,10 +292,10 @@ export default function App() {
                 onClick={() => setPage('report')}
                 disabled={result.items.length === 0}
                 aria-label="报告"
-                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
+                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-md flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'report'
-                    ? 'bg-brand text-white shadow-glow'
-                    : 'text-slate-500 hover:text-brand-deep hover:bg-brand-soft/60'
+                    ? 'bg-brand text-white dark:text-ink shadow-glow'
+                    : 'text-lo hover:text-brand-deep hover:bg-brand-soft/60'
                 }`}
               >
                 <LineChart className="h-4 w-4" />
@@ -288,18 +306,18 @@ export default function App() {
             {/* AI 设置 */}
             <button
               onClick={() => setSettingsOpen(true)}
-              className="h-9 px-2.5 rounded-xl border border-edge bg-panel/70 flex items-center gap-1.5 text-slate-500 hover:text-brand hover:border-brand/50 transition-all"
+              className="h-9 px-2.5 rounded-lg border border-edge bg-panel2 flex items-center gap-1.5 text-lo hover:text-brand hover:border-brand/50 transition-all"
               aria-label="AI 设置"
               title={`AI 服务配置${aiReady ? '（文本已就绪' : '（未配置'}${aiReady && visionReady ? ' + 视觉已就绪' : aiReady ? '，视觉未配置' : ''}）`}
             >
               <Settings className="h-4 w-4" />
-              <span className={`h-1.5 w-1.5 rounded-full ${visionReady ? 'bg-emerald-500' : aiReady ? 'bg-amber-400' : 'bg-slate-300'}`} />
+              <span className={`h-1.5 w-1.5 rounded-full ${visionReady ? 'bg-pos' : aiReady ? 'bg-warn' : 'bg-lo'}`} />
             </button>
 
             {/* 主题切换 */}
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="h-9 w-9 rounded-xl border border-edge bg-panel/70 grid place-items-center text-slate-500 hover:text-brand hover:border-brand/50 transition-all"
+              className="h-9 w-9 rounded-lg border border-edge bg-panel2 grid place-items-center text-lo hover:text-brand hover:border-brand/50 transition-all"
               aria-label="切换主题"
             >
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
@@ -336,7 +354,7 @@ export default function App() {
         {undo && (
           <div
             role="status"
-            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-amber-400/40"
+            className="glass rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-warn/40"
           >
             <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
               <Undo2 className="h-4 w-4 text-amber-500 shrink-0" />
@@ -366,7 +384,7 @@ export default function App() {
         {persistIssue && (
           <div
             role="alert"
-            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-rose-400/40"
+            className="glass rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-neg/40"
           >
             <div className="flex items-start sm:items-center gap-2 text-xs text-rose-500 flex-1">
               <AlertIcon />
@@ -400,7 +418,7 @@ export default function App() {
 
         {/* 分享链接无法解析时的提示 */}
         {shareError && (
-          <div className="glass rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-amber-500 border-amber-400/40">
+          <div className="glass rounded-lg px-4 py-3 flex items-center gap-2 text-xs text-warn border-warn/40">
             <AlertIcon />
             <span className="flex-1">分享链接已损坏或格式不被支持，已返回本地清单。</span>
             <button onClick={() => setShareError(false)} className="hover:text-amber-400" aria-label="关闭提示">
@@ -411,7 +429,7 @@ export default function App() {
 
         {/* 备份文件无法识别时的提示 */}
         {backupError && (
-          <div className="glass rounded-2xl px-4 py-3 flex items-center gap-2 text-xs text-amber-500 border-amber-400/40">
+          <div className="glass rounded-lg px-4 py-3 flex items-center gap-2 text-xs text-warn border-warn/40">
             <AlertIcon />
             <span className="flex-1">备份文件无法识别：不是本应用导出的 JSON，或内容已损坏。</span>
             <button onClick={() => setBackupError(false)} className="hover:text-amber-400" aria-label="关闭提示">
@@ -422,8 +440,8 @@ export default function App() {
 
         {/* 导入备份前的覆盖确认（导入会整体替换当前清单） */}
         {pendingImport && (
-          <div className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
-            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+          <div className="glass rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
+            <div className="flex items-center gap-2 text-xs text-lo flex-1">
               <Upload className="h-4 w-4 text-brand shrink-0" />
               <span>
                 备份含<strong className="text-brand-deep dark:text-brand">{pendingImport.scenarios.length}</strong> 份清单、
@@ -450,8 +468,8 @@ export default function App() {
 
         {/* 只读分享视图提示条 */}
         {shared && (
-          <div className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
-            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+          <div className="glass rounded-lg px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30">
+            <div className="flex items-center gap-2 text-xs text-lo flex-1">
               <Eye className="h-4 w-4 text-brand shrink-0" />
               <span>
                 正在查看<strong className="text-brand-deep dark:text-brand">他人分享的报告</strong>

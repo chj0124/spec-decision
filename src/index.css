@@ -13,57 +13,116 @@
   src: url('/fonts/space-grotesk-latin.woff2') format('woff2');
 }
 
-/* ===== 设计令牌：亮 / 暗主题 CSS 变量 =====
-   panel / edge / brand-soft / brand-deep 由变量驱动，
-   Tailwind 里以 rgb(var(--x) / <alpha-value>) 注册，切换 html.dark 即整站换肤 */
+/* ===== 设计令牌：亮 / 暗主题 CSS 变量（值表见 tailwind.config.js 顶部注释） ===== */
 :root {
   color-scheme: light;
-  --c-panel: 255 255 255;        /* 面板：纯白 */
-  --c-edge: 230 225 213;         /* 边框：暖灰 #e6e1d5 */
-  --c-brand-soft: 237 238 252;   /* 浅靛底 #edeefc */
-  --c-brand-deep: 55 48 163;     /* 深靛文字 #3730a3 */
+  --c-bg: 244 247 250;         /* 页面底：冷灰白 #F4F7FA */
+  --c-panel: 255 255 255;      /* 面板（一级）：纯白 */
+  --c-panel-2: 241 245 249;    /* 面板（二级）#F1F5F9 */
+  --c-edge: 213 224 234;       /* 描边 #D5E0EA */
+  --c-brand: 8 145 178;        /* 深青 #0891B2（亮底色上保对比度） */
+  --c-brand-strong: 14 116 144;
+  --c-brand-soft: 224 242 254; /* 浅青底 */
+  --c-brand-deep: 14 116 144;
+  --c-pos: 5 150 105;
+  --c-neg: 220 38 38;
+  --c-warn: 217 119 6;
+  --c-text-hi: 15 29 46;
+  --c-text-lo: 91 107 130;
+  --corner: rgba(8, 145, 178, 0.45);
 }
 
 html.dark {
   color-scheme: dark;
-  --c-panel: 28 28 34;           /* 面板：#1c1c22 */
-  --c-edge: 47 47 58;            /* 边框：#2f2f3a */
-  --c-brand-soft: 37 37 58;      /* 浅靛底（暗）#25253a */
-  --c-brand-deep: 165 180 252;   /* 深靛文字（暗）#a5b4fc */
+  --c-bg: 5 10 20;             /* 页面底：深蓝黑 #050A14 */
+  --c-panel: 11 18 32;         /* 面板（一级）#0B1220 */
+  --c-panel-2: 14 24 48;       /* 面板（二级）#0E1830 */
+  --c-edge: 30 48 72;          /* 青调描边 #1E3048 */
+  --c-brand: 34 211 238;       /* 青蓝 #22D3EE */
+  --c-brand-strong: 56 189 248;/* #38BDF8 */
+  --c-brand-soft: 19 36 56;    /* 暗青底 tint */
+  --c-brand-deep: 103 232 249; /* 亮青文字 */
+  --c-pos: 52 211 153;
+  --c-neg: 248 113 113;
+  --c-warn: 251 191 36;
+  --c-text-hi: 230 241 255;
+  --c-text-lo: 125 139 168;
+  --corner: rgba(34, 211, 238, 0.6);
 }
 
-/* ===== 页面底：暖纸 + 极淡靛蓝晕光 ===== */
+/* ===== 页面底：深蓝黑 + 极淡青色晕光（暗色主战场） ===== */
 body {
-  @apply bg-brand-mist text-slate-800 antialiased;
+  @apply bg-brand-mist text-hi antialiased;
+  background-color: rgb(var(--c-bg));
   background-image:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(79, 70, 229, 0.07), transparent),
-    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(79, 70, 229, 0.045), transparent);
+    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(8, 145, 178, 0.06), transparent),
+    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(8, 145, 178, 0.04), transparent);
   background-attachment: fixed;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* 暗色模式：墨黑 + 靛蓝晕光 */
 html.dark body {
-  @apply bg-ink text-slate-200;
+  background-color: rgb(var(--c-bg));
   background-image:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(99, 102, 241, 0.16), transparent),
-    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(99, 102, 241, 0.09), transparent);
+    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(34, 211, 238, 0.08), transparent),
+    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(56, 189, 248, 0.05), transparent);
 }
 
 /* 文字选区 */
 ::selection {
-  background: rgba(79, 70, 229, 0.22);
+  background: rgba(34, 211, 238, 0.28);
 }
 
-/* ===== 面板（玻璃拟态） ===== */
+/* ===== 面板体系（指挥舱舱室） =====
+   .glass          标准面板：面板底 + 1px 青调描边，圆角收至 lg（更硬朗）
+   .panel-title    面板标题规范：左侧 3px 青色竖线 + 标题（右侧辅助操作由组件自排）
+   .panel-sub      英文小号大写副标 / KPI 标签
+   .corner-brackets 四角直角括号装饰（仅冠军卡 / 散点图 / 识别确认三个核心面板）
+   语义告警直接用 token 色类：border-neg/40 + bg-neg/5（高危）、border-warn/40 + bg-warn/5（中警） */
 .glass {
-  @apply bg-panel/85 border border-edge backdrop-blur-xl;
-  box-shadow: 0 1px 2px rgba(22, 22, 27, 0.04), 0 8px 30px rgba(22, 22, 27, 0.06);
+  @apply bg-panel/95 border border-edge backdrop-blur-xl;
+  box-shadow: 0 1px 2px rgba(5, 10, 20, 0.05), 0 8px 30px rgba(5, 10, 20, 0.07);
 }
 
 html.dark .glass {
-  @apply bg-panel/75 border-edge;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 30px rgba(0, 0, 0, 0.3);
+  background-color: rgb(var(--c-panel) / 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(34, 211, 238, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    0 8px 30px rgba(0, 0, 0, 0.35);
+}
+
+.panel-title {
+  @apply flex items-center gap-2 text-sm font-semibold tracking-tight text-hi;
+}
+.panel-title::before {
+  content: '';
+  @apply inline-block w-[3px] h-4 bg-brand shrink-0;
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.5);
+}
+
+.panel-sub {
+  @apply font-mono text-[10px] uppercase tracking-[0.18em] text-lo;
+}
+
+/* 四角直角括号：8 段 12px 短线，仅装饰，打印时隐藏 */
+.corner-brackets {
+  background-image:
+    linear-gradient(var(--corner), var(--corner)), linear-gradient(var(--corner), var(--corner)),
+    linear-gradient(var(--corner), var(--corner)), linear-gradient(var(--corner), var(--corner)),
+    linear-gradient(var(--corner), var(--corner)), linear-gradient(var(--corner), var(--corner)),
+    linear-gradient(var(--corner), var(--corner)), linear-gradient(var(--corner), var(--corner));
+  background-size:
+    12px 2px, 2px 12px,
+    12px 2px, 2px 12px,
+    12px 2px, 2px 12px,
+    12px 2px, 2px 12px;
+  background-position:
+    left top, left top,
+    right top, right top,
+    left bottom, left bottom,
+    right bottom, right bottom;
+  background-repeat: no-repeat;
 }
 
 /* ===== 导出 PNG 期间：玻璃面板压平成实心 =====
@@ -81,7 +140,7 @@ html.dark .glass {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* 数字等宽 */
+/* 数字等宽：所有 KPI / 表格数值的统一字体 */
 .tabular {
   font-variant-numeric: tabular-nums;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -89,33 +148,33 @@ html.dark .glass {
 
 /* ===== 输入框 ===== */
 .field {
-  @apply w-full rounded-lg bg-panel border border-edge px-3 py-2 text-sm text-slate-800
-    placeholder:text-slate-400 outline-none transition-all duration-200
+  @apply w-full rounded-lg bg-panel border border-edge px-3 py-2 text-sm text-hi
+    placeholder:text-lo outline-none transition-all duration-200
     focus:border-brand focus:ring-2 focus:ring-brand/20;
 }
 
 html.dark .field {
-  @apply bg-white/[0.04] border-edge text-slate-100 placeholder:text-slate-500
+  @apply bg-white/[0.03] border-edge text-hi placeholder:text-lo
     focus:border-brand focus:ring-brand/25;
 }
 
-/* ===== 排名奖牌：金 / 银 / 铜 ===== */
-.rank-1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; }
-.rank-2 { background: linear-gradient(135deg, #cbd5e1, #94a3b8); color: #334155; }
-.rank-3 { background: linear-gradient(135deg, #d6a77a, #b07d4f); color: #fff; }
+/* ===== 排名位次：扁平指挥舱风（1=青色实心，2/3=二级面板描边） ===== */
+.rank-1 { background: rgb(var(--c-brand)); color: #04121c; }
+.rank-2 { background: rgb(var(--c-panel-2)); color: rgb(var(--c-text-lo)); border: 1px solid rgb(var(--c-edge)); }
+.rank-3 { background: rgb(var(--c-panel-2)); color: rgb(var(--c-text-lo)); border: 1px solid rgb(var(--c-edge)); }
 
-/* 网格纹理（暖灰，暗色为淡靛） */
+/* 网格纹理（亮=淡青，暗=青蓝微光） */
 .grid-texture {
   background-image:
-    linear-gradient(rgba(22, 22, 27, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(22, 22, 27, 0.035) 1px, transparent 1px);
+    linear-gradient(rgba(8, 145, 178, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 145, 178, 0.05) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
 html.dark .grid-texture {
   background-image:
-    linear-gradient(rgba(129, 140, 248, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(129, 140, 248, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(34, 211, 238, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.045) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
@@ -123,12 +182,12 @@ html.dark .grid-texture {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #d8d3c6;
+  background: #c3d2df;
   border-radius: 6px;
 }
-::-webkit-scrollbar-thumb:hover { background: #c4beaf; }
-html.dark ::-webkit-scrollbar-thumb { background: #3a3a46; }
-html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
+::-webkit-scrollbar-thumb:hover { background: #a9bdcf; }
+html.dark ::-webkit-scrollbar-thumb { background: #22344d; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #2e4767; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -137,7 +196,7 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
   }
 }
 
-/* ===== 打印样式：报告页打印 / 另存 PDF ===== */
+/* ===== 打印样式：报告页打印 / 另存 PDF（恢复干净排版，不被大屏风污染） ===== */
 @media print {
   /* 页头导航、页脚、交互按钮不进纸 */
   body > div > header,
@@ -154,8 +213,11 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
     background-image: none !important;
     color: #0f172a !important;
   }
-  /* 网格纹理与玻璃效果打印无意义，压平为白纸 */
+  /* 网格纹理、括号角、玻璃效果打印无意义，压平为白纸 */
   .grid-texture {
+    background-image: none !important;
+  }
+  .corner-brackets {
     background-image: none !important;
   }
   .glass {
@@ -163,6 +225,9 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
     box-shadow: none !important;
     border-color: #cbd5e1 !important;
     break-inside: avoid;
+  }
+  .panel-title::before {
+    box-shadow: none !important;
   }
   main {
     padding: 0 !important;

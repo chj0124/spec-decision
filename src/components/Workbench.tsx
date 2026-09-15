@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint, CategoryMode } from '../lib/types'
-import { uid, fmt, isStale, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
+import { uid, fmt, isStale, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay, normalizeUnit } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
@@ -209,8 +209,8 @@ function PriceAgeBadge({ history, className = '' }: { history?: PricePoint[]; cl
   )
 }
 
-// 权重饼图调色板（与图表主题一致的靛蓝主色系）
-const PIE_COLORS = ['#4f46e5', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#0ea5e9', '#ec4899']
+// 权重饼图调色板（与指挥舱青蓝主色系一致）
+const PIE_COLORS = ['#22D3EE', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#0ea5e9', '#ec4899']
 
 const PARAM_TYPE_LABELS: Record<ParamType, string> = {
   'higher-better': '越大越好',
@@ -624,6 +624,20 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
+  // KPI 状态带：当前最优单价（纯本地规则计算，不耗 AI）
+  const bestEntry = useMemo(() => {
+    let best: { up: number; unit: string } | null = null
+    for (const s of skus) {
+      if (!(s.price > 0 && s.quantity > 0 && s.packs > 0)) continue
+      const norm = normalizeUnit(s.quantity, s.unit)
+      const total = norm.value * Math.max(1, s.packs)
+      if (total <= 0) continue
+      const up = s.price / total
+      if (!best || up < best.up) best = { up, unit: norm.base || s.unit }
+    }
+    return best
+  }, [skus])
+
   // 分组上色：第一维度（口味/颜色/型号）用行底色，参数维度列用左侧色条
   const flavorColorMap = new Map<string, string>()
   let flavorColorIdx = 0
@@ -667,7 +681,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 grid place-items-center bg-ink/70 light:bg-slate-900/40 backdrop-blur-sm pointer-events-none"
           >
-            <div className="rounded-3xl border-2 border-dashed border-brand/70 bg-panel/80 px-12 py-10 text-center shadow-glow">
+            <div className="rounded-lg border-2 border-dashed border-brand/70 bg-panel/80 px-12 py-10 text-center shadow-glow corner-brackets">
               <UploadCloud className="h-12 w-12 mx-auto text-brand mb-3 animate-bounce" />
               <p className="text-lg font-bold text-brand">松开鼠标，AI 识别截图</p>
               <p className="text-xs text-slate-400 mt-1">自动提取规格与价格</p>
@@ -676,24 +690,37 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         )}
       </AnimatePresence>
 
-      {/* 顶部说明 + 快捷操作 */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
-        <div>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
-            录入规格，
-            <span className="text-brand">揪出最划算的</span>
-          </h2>
-          <p className="mt-2 text-sm text-slate-400 max-w-xl leading-relaxed">
-            把每个购买选项的名字、价格、单件含量与件数填进来，系统自动换算每单位价格，并结合附加参数给出推荐。
-          </p>
-          <p className="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
-            <UploadCloud className="h-3.5 w-3.5 text-brand/70" />
-            也可以直接把商品截图<b className="text-slate-600 font-medium">拖到页面任意位置</b>，或截图后按
-            <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-sm font-mono">Ctrl+V</kbd>
-            粘贴识别。
-            <span className="text-brand/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
-            <span className="text-emerald-400/80">也支持直接粘贴 Excel/电商页面表格（Ctrl+V），自动识别列。</span>
-          </p>
+      {/* KPI 状态带：有效规格 / 维度数 / 最优单价 / 计价模式 + 快捷操作 */}
+      <div className="glass rounded-lg px-4 py-3.5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex items-center gap-x-7 gap-y-3 flex-wrap">
+          <div>
+            <div className="panel-sub">有效规格 SKU</div>
+            <div className="text-2xl font-bold tabular text-hi mt-0.5">
+              {validCount}
+              <span className="text-xs text-lo font-normal"> / {skus.length}</span>
+            </div>
+          </div>
+          <div>
+            <div className="panel-sub">参数维度 DIMS</div>
+            <div className="text-2xl font-bold tabular text-hi mt-0.5">{config.dims.length}</div>
+          </div>
+          <div>
+            <div className="panel-sub">最优单价 BEST</div>
+            <div className="text-2xl font-bold tabular text-pos mt-0.5">
+              {bestEntry ? (
+                <>
+                  {fmt.price4(bestEntry.up)}
+                  <span className="text-xs text-lo font-normal">/{bestEntry.unit}</span>
+                </>
+              ) : '—'}
+            </div>
+          </div>
+          <div>
+            <div className="panel-sub">计价模式 MODE</div>
+            <div className="text-sm font-semibold text-hi mt-2">
+              {config.mode === 'per-feature' && config.primaryDimId ? '每元性能' : '每单位量'}
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -701,8 +728,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             onClick={() => setQuickOpen((v) => !v)}
             className={`px-3 py-2 rounded-lg border text-xs font-semibold transition-all flex items-center gap-1.5 ${
               quickOpen
-                ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-600 dark:text-emerald-300'
-                : 'bg-emerald-500/10 border-emerald-400/30 text-emerald-600 dark:text-emerald-300 hover:shadow-glow'
+                ? 'bg-brand/15 border-brand/50 text-brand-deep'
+                : 'bg-panel2 border-edge text-lo hover:text-brand-deep hover:border-brand/40'
             }`}
             title="一行一条：规格 + 价格，整段商品标题直接粘贴也行"
           >
@@ -711,17 +738,17 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           <button
             onClick={handleGenExample}
             disabled={genLoading}
-            className="px-3 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-400/40 text-xs font-semibold text-violet-300 hover:shadow-glow transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait"
+            className="px-3 py-2 rounded-lg bg-panel2 border border-edge text-xs font-semibold text-lo hover:text-brand-deep hover:border-brand/40 transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait"
             title="用 AI 自动生成一份逼真的多 SKU 比价示例（每次品类不同；未配置 AI 时回退内置真实商品模板）"
           >
             {genLoading
               ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : <Sparkles className="h-3.5 w-3.5" />}
+              : <Sparkles className="h-3.5 w-3.5 text-brand" />}
             {genLoading ? '生成中…' : 'AI 生成示例'}
           </button>
           <button
             onClick={() => fileRef.current?.click()}
-            className="px-3 py-2 rounded-lg bg-gradient-to-r from-brand/15 to-violet-500/15 border border-brand/40 text-xs font-semibold text-brand hover:shadow-glow transition-all flex items-center gap-1.5"
+            className="px-3 py-2 rounded-lg bg-brand/15 border border-brand/40 text-xs font-semibold text-brand-deep hover:shadow-glow transition-all flex items-center gap-1.5"
             title="支持一次选择多张截图（如不同 SKU 选择器页面），自动合并去重"
           >
             <ImagePlus className="h-3.5 w-3.5" /> AI 截图识别
@@ -736,6 +763,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           />
         </div>
       </div>
+      <p className="-mt-2 text-xs text-lo flex items-center gap-1.5 flex-wrap">
+        <UploadCloud className="h-3.5 w-3.5 text-brand/70" />
+        把商品截图<b className="text-hi font-medium">拖到页面任意位置</b>，或截图后按
+        <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-[11px] font-mono">Ctrl+V</kbd>
+        粘贴识别；支持多张截图自动合并去重，也支持直接粘贴 Excel / 电商页面表格。
+      </p>
 
       {/* 极速录入面板：一行一条「规格 价格」，粘贴即解析，入表前先看清谁划算 */}
       <AnimatePresence>
@@ -748,7 +781,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
-            <div className="glass rounded-2xl p-4 space-y-3">
+            <div className="glass rounded-lg p-4 space-y-3">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <span className="text-sm font-semibold flex items-center gap-1.5">
                   <Zap className="h-4 w-4 text-emerald-500" /> 文本极速录入
@@ -866,7 +899,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
       {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
       {genSummary && !genError && (
-        <div className="flex items-start gap-2 rounded-xl border border-brand/60 bg-brand px-3 py-2.5 text-sm text-white shadow-glow">
+        <div className="flex items-start gap-2 rounded-lg border border-brand/60 bg-brand px-3 py-2.5 text-sm text-white dark:text-ink shadow-glow">
           <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
           <span className="font-medium">{genSummary}</span>
         </div>
@@ -886,7 +919,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="glass rounded-2xl p-4 flex items-center gap-4 overflow-hidden"
+            className="glass rounded-lg p-4 flex items-center gap-4 overflow-hidden"
           >
             {scanPreviews.length > 0 && (
               <div className="flex gap-1.5 shrink-0">
@@ -956,16 +989,19 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         )}
       </AnimatePresence>
 
+      {/* ============ 指挥舱面板网格：左 SKU 录入 / 右 维度与权重 ============ */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+
       {/* ============ 参数维度 + 权重面板 ============ */}
-      <div className="glass rounded-2xl overflow-hidden">
+      <div className="glass rounded-lg overflow-hidden lg:order-2 lg:sticky lg:top-20">
         <button
           onClick={() => setDimPanelOpen(!dimPanelOpen)}
-          className="w-full px-4 py-3 flex items-center justify-between text-left border-b border-edge bg-brand-soft/40 hover:bg-brand-soft/60 transition-colors"
+          className="w-full px-4 py-3 flex items-center justify-between text-left border-b border-edge bg-panel2/60 hover:bg-panel2 transition-colors"
         >
-          <div className="flex items-center gap-2">
-            <Sliders className="h-4 w-4 text-brand" />
-            <span className="text-sm font-semibold">参数维度与权重</span>
-            <span className="text-xs text-slate-500">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="panel-title"><Sliders className="h-4 w-4 text-brand" />参数维度与权重</span>
+            <span className="panel-sub hidden xl:inline">WEIGHTS</span>
+            <span className="text-xs text-lo">
               {config.dims.length === 0
                 ? '（仅按价格比价，点击展开添加维度）'
                 : `共 ${config.dims.length} 个维度 + 价格`}
@@ -1192,10 +1228,13 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           onAdd={add}
         />
       ) : (
-      <div className="glass rounded-2xl overflow-hidden">
+      <div className="glass rounded-lg overflow-hidden lg:order-1">
         {/* 分组折叠工具栏 */}
-        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-brand-soft/50 flex-wrap">
-          <span className="text-xs text-slate-500">分组折叠：</span>
+        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge bg-panel2/60 flex-wrap">
+          <span className="panel-title text-xs">规格录入</span>
+          <span className="panel-sub hidden md:inline">SKU ENTRY</span>
+          <span className="text-edge hidden md:inline">|</span>
+          <span className="text-xs text-lo">分组折叠：</span>
           {(() => {
             // 动态构建分组选项，并过滤掉无区分意义的（所有 SKU 在该维度值相同）
             const allOptions: Array<{ key: string; label: string; getValue: (s: Sku) => string }> = [
@@ -1357,23 +1396,25 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         {/* 表尾：添加行 */}
         <button
           onClick={add}
-          className="w-full py-3 text-xs text-slate-500 hover:text-brand hover:bg-brand-soft/70 transition-all flex items-center justify-center gap-1.5 border-t border-edge"
+          className="w-full py-3 text-xs text-lo hover:text-brand hover:bg-brand-soft/70 transition-all flex items-center justify-center gap-1.5 border-t border-edge"
         >
           <Plus className="h-4 w-4" /> 添加一行规格
         </button>
       </div>
       )}
 
+      </div>
+
       {/* 底部生成 */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass rounded-2xl p-5">
-        <p className="text-sm text-slate-400">
-          已填写 <span className="text-brand font-semibold tabular">{validCount}</span> 个有效规格
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass rounded-lg p-5">
+        <p className="text-sm text-lo">
+          已填写 <span className="text-brand-deep font-semibold tabular">{validCount}</span> 个有效规格
           {validCount < 2 && '（至少 2 个才能对比）'}
         </p>
         <button
           onClick={onGenerate}
           disabled={validCount < 2}
-          className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-glow active:scale-[0.98] transition-all"
+          className="w-full sm:w-auto px-6 py-3 rounded-lg bg-brand text-white dark:text-ink font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-glow active:scale-[0.98] transition-all"
         >
           生成决策报告 <ArrowRight className="h-4 w-4" />
         </button>
@@ -1771,13 +1812,13 @@ function EmptyState({ genLoading, onGenExample, onPickImage, onQuickEntry, onAdd
   onAdd: () => void
 }) {
   const cardCls =
-    'group rounded-2xl border border-edge bg-panel/60 p-5 text-left hover:border-brand/50 hover:shadow-glow hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-wait disabled:hover:translate-y-0'
-  const iconCls = 'mb-3 h-10 w-10 rounded-xl grid place-items-center'
+    'group rounded-lg border border-edge bg-panel2/60 p-5 text-left hover:border-brand/50 hover:shadow-glow hover:-translate-y-0.5 transition-all disabled:opacity-60 disabled:cursor-wait disabled:hover:translate-y-0'
+  const iconCls = 'mb-3 h-10 w-10 rounded-lg grid place-items-center'
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glass rounded-2xl px-5 py-12 sm:py-16"
+      className="glass rounded-lg px-5 py-12 sm:py-16 lg:order-1"
     >
       <div className="max-w-2xl mx-auto text-center">
         <div className="mx-auto mb-5 h-14 w-14 rounded-2xl bg-brand-soft grid place-items-center shadow-soft">
