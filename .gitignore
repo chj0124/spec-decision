@@ -20,3 +20,5 @@ playwright-report/
 # 工作区记忆与构建缓存
 .workbuddy/
 *.tsbuildinfo
+# 编辑器自动生成的分享缓存（非源码）
+.trae-html-share-packages/
