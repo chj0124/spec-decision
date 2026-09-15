@@ -23,7 +23,7 @@
 
 ## 特性
 
-- 深色科技风，亮 / 暗主题一键切换
+- 暖纸 × 靛蓝编辑风，亮 / 暗主题一键切换（图表配色随主题自适应）
 - 纯前端，数据存浏览器 `localStorage`，不上传任何信息
 - 手机 / 电脑响应式，均可用
 - 无登录注册、无后端数据库，仅 2 个页面（工作台 + 报告页）
@@ -68,6 +68,7 @@ src/
     ├── ai.ts               # AI 客户端（OpenAI 兼容，同源代理转发）
     ├── aiSample.ts         # AI 生成示例（含内置真实商品模板兜底）
     ├── useUnitNormalize.ts # 生僻单位 AI 归一化 hook
+    ├── useChartTheme.ts    # 图表主题 hook（亮 / 暗自适应配色）
     └── store.ts            # localStorage 持久化 + v1→v2 迁移
 api/
 ├── recognize.ts            # Vercel Edge 视觉识别端点（可选）

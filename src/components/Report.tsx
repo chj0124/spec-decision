@@ -516,7 +516,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <TrendingDown className="h-5 w-5 text-brand" /> 单价对比 & 边际效益
           </h3>
           <p className="text-xs text-slate-500 mb-5">
-            双轴合一图：青柱=单价，橙柱=升档的边际成本（每多买 1 基准单位花多少），绿线=相对上一档单价降幅% ·
+            双轴合一图：靛柱=单价，橙柱=升档的边际成本（每多买 1 基准单位花多少），绿线=相对上一档单价降幅% ·
             按总量升序即升档顺序，绿线断崖处即性价比拐点
           </p>
 
