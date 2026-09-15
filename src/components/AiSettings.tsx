@@ -272,7 +272,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
               </button>
               <button
                 onClick={save}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm hover:shadow-glow active:scale-[0.98] transition-all"
+                className="flex-1 px-4 py-2.5 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm hover:shadow-glow active:scale-[0.98] transition-all"
               >
                 保存配置
               </button>

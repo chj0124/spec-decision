@@ -64,7 +64,7 @@ export default function App() {
       <header className="sticky top-0 z-40 glass border-x-0 border-t-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-brand to-emerald-600 grid place-items-center shadow-glow shrink-0">
+            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-brand to-violet-500 grid place-items-center shadow-glow shrink-0">
               <LineChart className="h-5 w-5 text-white" strokeWidth={2.5} />
             </div>
             <div className="min-w-0">
@@ -78,14 +78,14 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* 页面切换 */}
-            <nav className="flex rounded-lg border border-edge overflow-hidden">
+            {/* 页面切换：分段控件，激活项实心填充 */}
+            <nav className="flex rounded-xl border border-edge bg-panel/70 p-1 gap-1">
               <button
                 onClick={() => setPage('workbench')}
-                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all ${
                   page === 'workbench'
-                    ? 'bg-brand/15 text-brand'
-                    : 'text-slate-400 hover:text-brand-deep'
+                    ? 'bg-brand text-white shadow-glow'
+                    : 'text-slate-500 hover:text-brand-deep hover:bg-brand-soft/60'
                 }`}
               >
                 <PencilLine className="h-4 w-4" />
@@ -94,10 +94,10 @@ export default function App() {
               <button
                 onClick={() => setPage('report')}
                 disabled={result.items.length === 0}
-                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors disabled:opacity-40 ${
+                className={`px-3 sm:px-4 py-1.5 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-40 disabled:pointer-events-none ${
                   page === 'report'
-                    ? 'bg-brand/15 text-brand'
-                    : 'text-slate-400 hover:text-brand-deep'
+                    ? 'bg-brand text-white shadow-glow'
+                    : 'text-slate-500 hover:text-brand-deep hover:bg-brand-soft/60'
                 }`}
               >
                 <LineChart className="h-4 w-4" />
@@ -108,7 +108,7 @@ export default function App() {
             {/* AI 设置 */}
             <button
               onClick={() => setSettingsOpen(true)}
-              className="h-9 px-2.5 rounded-lg border border-edge flex items-center gap-1.5 text-slate-600 hover:text-brand hover:border-brand/50 transition-all"
+              className="h-9 px-2.5 rounded-xl border border-edge bg-panel/70 flex items-center gap-1.5 text-slate-500 hover:text-brand hover:border-brand/50 transition-all"
               aria-label="AI 设置"
               title={`AI 服务配置${aiReady ? '（文本已就绪' : '（未配置'}${aiReady && visionReady ? ' + 视觉已就绪' : aiReady ? '，视觉未配置' : ''}）`}
             >
@@ -119,7 +119,7 @@ export default function App() {
             {/* 主题切换 */}
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="h-9 w-9 rounded-lg border border-edge grid place-items-center text-slate-600 hover:text-brand hover:border-brand/50 transition-all"
+              className="h-9 w-9 rounded-xl border border-edge bg-panel/70 grid place-items-center text-slate-500 hover:text-brand hover:border-brand/50 transition-all"
               aria-label="切换主题"
             >
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

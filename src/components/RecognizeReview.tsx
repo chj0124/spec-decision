@@ -228,7 +228,7 @@ export default function RecognizeReview({
               </span>
             )}
             {category && source !== 'error' && (
-              <span className="text-sm px-2 py-0.5 rounded-full bg-brand-soft border border-edge text-slate-600 font-medium inline-flex items-center gap-1">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-brand-soft border border-edge text-slate-600 dark:text-slate-300 font-medium inline-flex items-center gap-1">
                 <Tag className="h-3 w-3" /> {category}
               </span>
             )}
@@ -554,7 +554,7 @@ export default function RecognizeReview({
               onClick={() => onConfirm(valid, dimRows, existingCount > 0 ? 'replace' : 'append')}
               disabled={valid.length === 0}
               title={existingCount > 0 ? `清空现有 ${existingCount} 条规格，用识别结果替换` : undefined}
-              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
+              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 hover:shadow-glow active:scale-[0.98] transition-all"
             >
               <CheckCheck className="h-4 w-4" />
               {existingCount > 0 ? `替换导入 ${valid.length} 条` : `确认导入 ${valid.length} 条`}

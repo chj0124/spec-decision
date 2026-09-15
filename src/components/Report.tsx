@@ -7,6 +7,7 @@ import {
   Printer, Copy, Check, Radar as RadarIcon,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useChartTheme } from '../lib/useChartTheme'
 import {
   BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ComposedChart, Line,
@@ -25,31 +26,20 @@ interface Props {
 const RANK_ICON = [Crown, Medal, Award]
 const RANK_STYLE = ['rank-1', 'rank-2', 'rank-3']
 
-const tooltipStyle = {
-  backgroundColor: '#0f1626',
-  border: '1px solid #1c2740',
-  borderRadius: '10px',
-  fontSize: '12px',
-  color: '#e2e8f0',
-}
 // Recharts Tooltip 内部 label 与每个 item 的文字颜色需要单独指定，
 // 否则它会用默认深色（#333 之类），在深色背景上"融为一体"看不清。
-const tooltipLabelStyle = { color: '#e2e8f0', marginBottom: '4px' }
-const tooltipItemStyle = { color: '#e2e8f0' }
+// 具体配色由 useChartTheme 按亮 / 暗主题给出（见组件内 chartTheme）。
 
 /** 边际效益分级样式映射：row=行底色弱高亮，bar=左侧色条颜色（inline style 用） */
 const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; row: string; bar: string }> = {
-  great: { label: '闭眼入', badge: 'bg-brand/15 text-brand', dot: 'bg-brand', row: 'bg-brand/5',  bar: '#06b6d4' },
-  good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-400',     dot: 'bg-sky-400',     row: 'bg-sky-500/5',    bar: '#0ea5e9' },
-  fair:  { label: '持平',   badge: 'bg-slate-500/20 text-slate-300', dot: 'bg-slate-400',   row: '',                bar: '#64748b' },
-  poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-400', dot: 'bg-amber-400',   row: 'bg-amber-500/5',  bar: '#f59e0b' },
-  bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-400',     dot: 'bg-red-400',     row: 'bg-red-500/5',    bar: '#ef4444' },
+  great: { label: '闭眼入', badge: 'bg-brand/15 text-brand',                        dot: 'bg-brand',      row: 'bg-brand/5',   bar: '#4f46e5' },
+  good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-500 dark:text-sky-400',  dot: 'bg-sky-400',    row: 'bg-sky-500/5', bar: '#0ea5e9' },
+  fair:  { label: '持平',   badge: 'bg-slate-500/15 text-slate-500 dark:text-slate-300', dot: 'bg-slate-400', row: '',            bar: '#94a3b8' },
+  poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-500 dark:text-amber-400', dot: 'bg-amber-400', row: 'bg-amber-500/5', bar: '#f59e0b' },
+  bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-500 dark:text-red-400',  dot: 'bg-red-400',    row: 'bg-red-500/5', bar: '#ef4444' },
 }
 
 const round6 = (n: number) => Math.round(n * 1e6) / 1e6
-
-/** 雷达图系列调色板（与单价图青/橙/绿主色系一致，最多 5 条） */
-const RADAR_COLORS = ['#06b6d4', '#f59e0b', '#22c55e', '#a855f7', '#ef4444']
 
 /** 雷达图/图例用的系列短名：优先「口味·规格」，超长截断 */
 function shortLabel(it: ComputedSku): string {
@@ -97,16 +87,16 @@ function buildSummaryText(result: DecisionResult, config: DecisionConfig): strin
   return lines.join('\n')
 }
 
-/** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致 */
+/** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致（亮 / 暗双模式） */
 const FLAVOR_COLORS = [
-  'bg-sky-900/20',
-  'bg-amber-900/20',
-  'bg-emerald-900/20',
-  'bg-violet-900/20',
-  'bg-rose-900/20',
-  'bg-cyan-900/20',
-  'bg-orange-900/20',
-  'bg-teal-900/20',
+  'bg-sky-100/60 dark:bg-sky-900/20',
+  'bg-amber-100/60 dark:bg-amber-900/20',
+  'bg-emerald-100/60 dark:bg-emerald-900/20',
+  'bg-violet-100/60 dark:bg-violet-900/20',
+  'bg-rose-100/60 dark:bg-rose-900/20',
+  'bg-cyan-100/60 dark:bg-cyan-900/20',
+  'bg-orange-100/60 dark:bg-orange-900/20',
+  'bg-teal-100/60 dark:bg-teal-900/20',
 ]
 
 /** 全量视图分组维度选项 key 类型 */
@@ -132,6 +122,7 @@ function groupComputedSkus(
 
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
+  const chartTheme = useChartTheme()
 
   // 复制决策摘要到剪贴板（2 秒后恢复按钮文案）
   const [copied, setCopied] = useState(false)
@@ -355,7 +346,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             </div>
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
               <div className="flex-1">
-                <h2 className="text-3xl sm:text-5xl font-bold tracking-tighter">{best.name}</h2>
+                <h2 className="text-3xl sm:text-5xl font-bold tracking-tight">{best.name}</h2>
                 <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
@@ -532,10 +523,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           {/* 双轴合一图：单价柱（青）+ 边际成本柱（橙）+ 降幅折线（绿，右轴%） */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（青）
+              <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（靛）
               <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本（橙）
               <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
-              <span className="text-slate-600">· 按总量升序=升档顺序</span>
+              <span className="text-slate-400 dark:text-slate-500">· 按总量升序=升档顺序</span>
             </div>
             <div className="h-80">
               <ResponsiveContainer width="100%" height="100%">
@@ -564,10 +555,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   })
                   return (
                     <ComposedChart data={chartData} margin={{ top: 36, right: 52, bottom: 8, left: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#1c2740" vertical={false} />
+                      <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
                       <XAxis
                         dataKey="name"
-                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
                         interval={0}
                         angle={-30}
                         textAnchor="end"
@@ -575,23 +566,23 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       />
                       <YAxis
                         yAxisId="price"
-                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
                         tickFormatter={(v) => `¥${v}`}
                         width={56}
                       />
                       <YAxis
                         yAxisId="pct"
                         orientation="right"
-                        tick={{ fill: '#64748b', fontSize: 11 }}
+                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
                         tickFormatter={(v) => `${v}%`}
                         width={44}
                         domain={[0, 'dataMax']}
                       />
                       <Tooltip
-                        cursor={{ fill: 'rgba(6, 182, 212, 0.08)' }}
-                        contentStyle={tooltipStyle}
-                        labelStyle={tooltipLabelStyle}
-                        itemStyle={tooltipItemStyle}
+                        cursor={{ fill: chartTheme.cursorFill }}
+                        contentStyle={chartTheme.tooltipStyle}
+                        labelStyle={chartTheme.tooltipLabelStyle}
+                        itemStyle={chartTheme.tooltipItemStyle}
                         formatter={(value, name) => {
                           const num = typeof value === 'number' ? value : Number(value)
                           if (name === '降幅') return [`${num}%`, name]
@@ -601,7 +592,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <Bar
                         yAxisId="price"
                         dataKey="单价"
-                        fill="#06b6d4"
+                        fill={chartTheme.series.unitPrice}
                         radius={[6, 6, 0, 0]}
                         maxBarSize={40}
                         label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
@@ -611,8 +602,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                             <text
                               x={x + width / 2}
                               y={y - 8}
-                              fill="#e2e8f0"
-                              stroke="#0b1220"
+                              fill={chartTheme.label.fill}
+                              stroke={chartTheme.label.stroke}
                               strokeWidth={3}
                               paintOrder="stroke"
                               fontSize={11}
@@ -627,7 +618,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <Bar
                         yAxisId="price"
                         dataKey="边际成本"
-                        fill="#f59e0b"
+                        fill={chartTheme.series.margin}
                         radius={[6, 6, 0, 0]}
                         maxBarSize={40}
                         label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
@@ -637,8 +628,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                             <text
                               x={x + width / 2}
                               y={y - 8}
-                              fill="#e2e8f0"
-                              stroke="#0b1220"
+                              fill={chartTheme.label.fill}
+                              stroke={chartTheme.label.stroke}
                               strokeWidth={3}
                               paintOrder="stroke"
                               fontSize={11}
@@ -653,14 +644,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <Line
                         yAxisId="pct"
                         dataKey="降幅"
-                        stroke="#22c55e"
+                        stroke={chartTheme.series.drop}
                         strokeWidth={2.4}
-                        dot={{ r: 4, fill: '#22c55e' }}
+                        dot={{ r: 4, fill: chartTheme.series.drop }}
                         label={(props: { x?: number; y?: number; value?: number }) => {
                           const { x, y, value } = props
                           if (x == null || y == null || value == null) return <g />
                           return (
-                            <text x={x} y={y - 10} fill="#86efac" fontSize={10} fontWeight={700} textAnchor="middle">
+                            <text x={x} y={y - 10} fill={chartTheme.series.drop} fontSize={10} fontWeight={700} textAnchor="middle">
                               {value}%
                             </text>
                           )
@@ -769,26 +760,26 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           <div className="h-96">
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={radar.data} cx="50%" cy="50%" outerRadius="70%">
-                <PolarGrid stroke="#1c2740" />
-                <PolarAngleAxis dataKey="dim" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                <PolarGrid stroke={chartTheme.grid} />
+                <PolarAngleAxis dataKey="dim" tick={{ fill: chartTheme.tick, fontSize: 12 }} />
                 <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
                 {radar.keys.map((k, i) => (
                   <Radar
                     key={k}
                     name={k}
                     dataKey={k}
-                    stroke={RADAR_COLORS[i % RADAR_COLORS.length]}
-                    fill={RADAR_COLORS[i % RADAR_COLORS.length]}
+                    stroke={chartTheme.radar[i % chartTheme.radar.length]}
+                    fill={chartTheme.radar[i % chartTheme.radar.length]}
                     fillOpacity={0.12}
                     strokeWidth={2}
                   />
                 ))}
                 <Tooltip
-                  contentStyle={tooltipStyle}
-                  labelStyle={tooltipLabelStyle}
-                  itemStyle={tooltipItemStyle}
+                  contentStyle={chartTheme.tooltipStyle}
+                  labelStyle={chartTheme.tooltipLabelStyle}
+                  itemStyle={chartTheme.tooltipItemStyle}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#94a3b8' }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: chartTheme.tick }} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
@@ -834,7 +825,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
               </span>
             )}
             {hasFlavors && (
-              <span className="text-sm px-1.5 py-0.5 rounded bg-slate-600/60 text-slate-200">
+              <span className="text-sm px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-500 dark:text-slate-300">
                 {cluster.members.length} 种{flavorLabel}
               </span>
             )}
@@ -873,7 +864,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
                 className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all tabular ${
                   m.id === activeId
                     ? 'bg-brand/20 text-brand border border-brand/50'
-                    : 'bg-brand-soft/50 text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
+                    : 'bg-brand-soft/50 text-slate-400 border border-edge hover:text-brand-deep hover:border-brand/40'
                 }`}
               >
                 {m.name}
@@ -982,7 +973,7 @@ function RankGroupRows({
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(item.price)}</td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
               <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(item.unitPrice)}</td>
-              <td className="px-2 py-2.5 text-right tabular text-slate-300">{fmt.yuan(item.packPrice)}</td>
+              <td className="px-2 py-2.5 text-right tabular text-slate-500 dark:text-slate-300">{fmt.yuan(item.packPrice)}</td>
             </tr>
           )
         })}

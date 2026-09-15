@@ -8,6 +8,7 @@ import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
 import RecognizeReview from './RecognizeReview'
+import { useChartTheme } from '../lib/useChartTheme'
 import {
   Plus, Trash2, ImagePlus, Loader2,
   Sparkles, ArrowRight, UploadCloud, ChevronDown,
@@ -64,8 +65,8 @@ const emptySku = (): Sku => ({
   id: uid(), name: '', price: 0, quantity: 0, unit: 'g', packs: 1,
 })
 
-// 权重饼图调色板
-const PIE_COLORS = ['#16a34a', '#0ea5e9', '#f59e0b', '#a855f7', '#ef4444', '#14b8a6', '#ec4899']
+// 权重饼图调色板（与图表主题一致的靛蓝主色系）
+const PIE_COLORS = ['#4f46e5', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#0ea5e9', '#ec4899']
 
 const PARAM_TYPE_LABELS: Record<ParamType, string> = {
   'higher-better': '越大越好',
@@ -108,6 +109,7 @@ const GROUP_BAR_COLORS = [
 ]
 
 export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange }: Props) {
+  const chartTheme = useChartTheme()
   const [scanning, setScanning] = useState(false)
   const [scanPreviews, setScanPreviews] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
@@ -415,7 +417,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       {/* 顶部说明 + 快捷操作 */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tighter">
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
             录入规格，
             <span className="text-brand">揪出最划算的</span>
           </h2>
@@ -446,7 +448,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           </button>
           <button
             onClick={() => fileRef.current?.click()}
-            className="px-3 py-2 rounded-lg bg-gradient-to-r from-brand/20 to-sky-500/20 border border-brand/40 text-xs font-semibold text-brand hover:shadow-glow transition-all flex items-center gap-1.5"
+            className="px-3 py-2 rounded-lg bg-gradient-to-r from-brand/15 to-violet-500/15 border border-brand/40 text-xs font-semibold text-brand hover:shadow-glow transition-all flex items-center gap-1.5"
             title="支持一次选择多张截图（如不同 SKU 选择器页面），自动合并去重"
           >
             <ImagePlus className="h-3.5 w-3.5" /> AI 截图识别
@@ -464,7 +466,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
       {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
       {genSummary && !genError && (
-        <div className="flex items-start gap-2 rounded-xl border border-brand bg-cyan-500 px-3 py-2.5 text-sm text-white">
+        <div className="flex items-start gap-2 rounded-xl border border-brand/60 bg-brand px-3 py-2.5 text-sm text-white shadow-glow">
           <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
           <span className="font-medium">{genSummary}</span>
         </div>
@@ -594,7 +596,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       className="field py-1.5 text-xs flex-1 opacity-70"
                     />
                     <span className="text-sm text-slate-500 w-16 text-center">越小越好</span>
-                    <div className="flex items-center gap-0.5 rounded-lg bg-white/50 dark:bg-emerald-950/30 p-0.5">
+                    <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                       {WEIGHT_TIERS.map((t) => (
                         <button
                           key={t.value}
@@ -658,7 +660,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                           title="评级序列，从优到劣，用逗号分隔"
                         />
                       )}
-                      <div className="flex items-center gap-0.5 rounded-lg bg-white/50 dark:bg-emerald-950/30 p-0.5">
+                      <div className="flex items-center gap-0.5 rounded-lg bg-panel/60 border border-edge/60 p-0.5">
                         {WEIGHT_TIERS.map((t) => (
                           <button
                             key={t.value}
@@ -715,15 +717,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                             ))}
                           </Pie>
                           <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#0f1626',
-                              border: '1px solid #1c2740',
-                              borderRadius: '10px',
-                              fontSize: '12px',
-                              color: '#e2e8f0',
-                            }}
-                            labelStyle={{ color: '#e2e8f0', marginBottom: '4px' }}
-                            itemStyle={{ color: '#e2e8f0' }}
+                            contentStyle={chartTheme.tooltipStyle}
+                            labelStyle={chartTheme.tooltipLabelStyle}
+                            itemStyle={chartTheme.tooltipItemStyle}
                             formatter={(v: number) => `${v}`}
                           />
                         </PieChart>
@@ -787,7 +783,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                     active
                       ? 'bg-brand/20 text-brand border border-brand/50'
-                      : 'text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
+                      : 'text-slate-400 border border-edge hover:text-brand-deep hover:border-brand/40'
                   }`}
                 >
                   {opt.label}
@@ -811,7 +807,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[960px]">
             <thead>
-              <tr className="border-b border-edge text-left text-sm text-slate-500">
+              <tr className="border-b border-edge bg-brand-soft/30 text-left text-sm text-slate-500">
                 <th className="px-3 py-3 font-medium w-8">#</th>
                 <th className="px-3 py-3 font-medium">{flavorLabel}</th>
                 <th className="px-3 py-3 font-medium">规格（重量×数量）</th>
@@ -880,7 +876,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <button
           onClick={onGenerate}
           disabled={validCount < 2}
-          className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-brand to-emerald-600 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-glow active:scale-[0.98] transition-all"
+          className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-brand to-violet-500 text-white font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-glow active:scale-[0.98] transition-all"
         >
           生成决策报告 <ArrowRight className="h-4 w-4" />
         </button>
