@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
+import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, MarginInsight } from '../lib/types'
 import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
-  Printer, Copy, Check, Radar as RadarIcon, Share2, Minus, ImageDown, Loader2,
+  Printer, Copy, Check, Share2, Minus, ImageDown, Loader2,
 } from 'lucide-react'
 import { motion, AnimatePresence, animate } from 'framer-motion'
-import { useChartTheme } from '../lib/useChartTheme'
+import { useChartTheme, type ChartTheme } from '../lib/useChartTheme'
 import { exportNodeToPng, buildReportFileName, EXPORT_BG } from '../lib/exportImage'
 import {
-  Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ComposedChart, Line, ScatterChart, Scatter, ZAxis,
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
+  Bar, BarChart, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  ComposedChart, Line, Cell, ReferenceLine, ReferenceDot,
 } from 'recharts'
 
 interface Props {
@@ -45,8 +44,6 @@ const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; r
   bad:   { label: '不建议', badge: 'bg-red-500/15 text-red-500 dark:text-red-400',  dot: 'bg-red-400',    row: 'bg-red-500/5', bar: '#ef4444' },
 }
 
-const round6 = (n: number) => Math.round(n * 1e6) / 1e6
-
 /** 数字滚动递增：冠军卡核心指标挂载时从 0 滚动到目标值（尊重"减少动态效果"系统偏好） */
 function CountUp({ value, format, className }: { value: number; format: (n: number) => string; className?: string }) {
   const [text, setText] = useState(() => format(value))
@@ -66,11 +63,11 @@ function CountUp({ value, format, className }: { value: number; format: (n: numb
   return <span className={className}>{text}</span>
 }
 
-/** 雷达图/图例用的系列短名：优先「口味·规格」，超长截断 */
-function shortLabel(it: ComputedSku): string {
-  const { spec, flavor } = parseFlavor(it.name)
-  if (spec && spec.length <= 16) return flavor ? `${flavor}·${spec}` : spec
-  return it.name.length > 16 ? it.name.slice(0, 16) + '…' : it.name
+/** 一句话结论 / 图表轴标签里的短名：优先「口味·规格」，超长截断 */
+function shortSpec(name: string): string {
+  const { spec, flavor } = parseFlavor(name)
+  if (spec && spec.length <= 12) return flavor ? `${flavor}·${spec}` : spec
+  return name.length > 12 ? name.slice(0, 12) + '…' : name
 }
 
 /**
@@ -183,6 +180,227 @@ function groupComputedSkus(
   return [...map.entries()].map(([key, items]) => ({ key, items }))
 }
 
+/* ============ 主视觉：围绕「每单位单价」这一个标尺的四种看法 ============ */
+
+/** 主视觉视图类型（四种候选，供减法筛选） */
+type VisualKind = 'price' | 'perYuan' | 'quadrant' | 'savings'
+
+/** 主视觉用的单条规格（已合并同价同规格的口味变体，并按展示单位换算） */
+interface SpecRow {
+  id: string
+  /** 轴标签短名 */
+  name: string
+  /** 悬停 tooltip 用的完整名 */
+  fullName: string
+  /** 每展示单位单价（如 ¥/L） */
+  perUnit: number
+  /** 总量（展示单位） */
+  qty: number
+  /** 每 100 元能买到的展示单位量 */
+  per100: number
+  /** 相对全场最贵单价、按本档总量折算出的省下金额（¥） */
+  savings: number
+}
+
+/** 非冠军柱的中性色（亮 / 暗各一） */
+const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
+
+/**
+ * 性价比主视觉：同一份数据四种编码方式，都只围绕「每单位单价」。
+ * - price    每单位单价横条（越短越省 + 平均线）
+ * - perYuan  每 100 元买到多少（越长越划算）
+ * - quadrant 性价比象限（总量 × 单价，连线即升档路径）
+ * - savings  相对最贵档省下多少钱（绝对金额）
+ * 冠军条统一高亮，其余中性色。
+ */
+function MainVisual({
+  kind, rows, unitLabel, anchorId, theme,
+}: {
+  kind: VisualKind
+  rows: SpecRow[]
+  unitLabel: string
+  anchorId: string
+  theme: ChartTheme
+}) {
+  const tooltipProps = {
+    contentStyle: theme.tooltipStyle,
+    labelStyle: theme.tooltipLabelStyle,
+    itemStyle: theme.tooltipItemStyle,
+  }
+  const fullNameOf = (value: unknown, payload?: Array<{ payload?: SpecRow }>) =>
+    payload?.[0]?.payload?.fullName ?? String(value)
+
+  // 象限图：横轴总量（升序连线=升档路径）、纵轴每单位单价，绿点标最划算
+  if (kind === 'quadrant') {
+    const data = [...rows].sort((a, b) => a.qty - b.qty)
+    const avgQty = data.reduce((s, r) => s + r.qty, 0) / Math.max(1, data.length)
+    const avgUnit = data.reduce((s, r) => s + r.perUnit, 0) / Math.max(1, data.length)
+    const anchor = data.find((r) => r.id === anchorId) ?? data[0]
+    return (
+      <div className="h-80">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 24, right: 24, bottom: 44, left: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} />
+            <XAxis
+              type="number"
+              dataKey="qty"
+              tick={{ fill: theme.tick, fontSize: 11 }}
+              tickFormatter={(v) => fmt.num(v)}
+              label={{ value: `总量（${unitLabel}）→ 越右越大份`, position: 'insideBottom', offset: -28, fill: theme.tick, fontSize: 11 }}
+            />
+            <YAxis
+              type="number"
+              dataKey="perUnit"
+              tick={{ fill: theme.tick, fontSize: 11 }}
+              tickFormatter={(v) => `¥${v}`}
+              width={62}
+              label={{ value: `每${unitLabel}单价 ↓ 越低越省`, angle: -90, position: 'insideLeft', fill: theme.tick, fontSize: 11 }}
+            />
+            {/* 平均线：右下象限 = 又大份又便宜 */}
+            <ReferenceLine x={avgQty} stroke={theme.tick} strokeDasharray="4 4" />
+            <ReferenceLine y={avgUnit} stroke={theme.tick} strokeDasharray="4 4" />
+            <Tooltip
+              {...tooltipProps}
+              labelFormatter={fullNameOf}
+              formatter={(value, name) => [fmt.priceUnit(Number(value)), String(name)]}
+            />
+            <Line
+              dataKey="perUnit"
+              name={`每${unitLabel}单价`}
+              type="monotone"
+              stroke={theme.series.unitPrice}
+              strokeWidth={2.4}
+              dot={{ r: 5, fill: theme.series.unitPrice }}
+              activeDot={{ r: 7 }}
+            />
+            {anchor && (
+              <ReferenceDot x={anchor.qty} y={anchor.perUnit} r={7} fill={theme.series.drop} stroke={theme.label.stroke} strokeWidth={2} />
+            )}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    )
+  }
+
+  // 三种横条：单价 / 每元买到 / 省下金额
+  const isSavings = kind === 'savings'
+  const isPerYuan = kind === 'perYuan'
+  const dataKey: keyof Pick<SpecRow, 'perUnit' | 'per100' | 'savings'> =
+    isSavings ? 'savings' : isPerYuan ? 'per100' : 'perUnit'
+  const valueText = (v: number) =>
+    isSavings ? fmt.yuan(v) : isPerYuan ? `${fmt.num(v)}${unitLabel}` : fmt.priceUnit(v)
+  const seriesName = isSavings ? '省下' : isPerYuan ? '每 100 元买到' : `每${unitLabel}单价`
+  const axisLabel = isSavings
+    ? '省下金额（元）→'
+    : isPerYuan
+      ? `每 100 元买到的量（${unitLabel}）→`
+      : `每${unitLabel}单价（元）→`
+  // 单价 / 每元买到：从优到劣（省的排上面）；省下金额：从多到少
+  const data = [...rows].sort((a, b) =>
+    isSavings ? b.savings - a.savings : isPerYuan ? b.per100 - a.per100 : a.perUnit - b.perUnit,
+  )
+  const avg = data.reduce((s, r) => s + r[dataKey], 0) / Math.max(1, data.length)
+  const chartHeight = Math.max(220, data.length * 40 + 60)
+
+  return (
+    <div style={{ height: chartHeight }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart layout="vertical" data={data} margin={{ top: 8, right: 72, bottom: 24, left: 4 }} barCategoryGap={12}>
+          <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
+          <XAxis
+            type="number"
+            tick={{ fill: theme.tick, fontSize: 11 }}
+            tickFormatter={(v) => (isSavings || !isPerYuan ? `¥${v}` : `${v}`)}
+            label={{ value: axisLabel, position: 'insideBottom', offset: -14, fill: theme.tick, fontSize: 11 }}
+          />
+          <YAxis type="category" dataKey="name" width={94} interval={0} tick={{ fill: theme.tick, fontSize: 11 }} />
+          <Tooltip
+            cursor={{ fill: theme.cursorFill }}
+            {...tooltipProps}
+            labelFormatter={fullNameOf}
+            formatter={(value) => [valueText(Number(value)), seriesName]}
+          />
+          {/* 平均线只在"越短越省"的单价图上画（每元/省下越高越好，平均线容易被误读） */}
+          {kind === 'price' && (
+            <ReferenceLine x={avg} stroke={theme.tick} strokeDasharray="4 4" label={{ value: '平均', position: 'top', fill: theme.tick, fontSize: 10 }} />
+          )}
+          <Bar dataKey={dataKey} name={seriesName} radius={[0, 6, 6, 0]} maxBarSize={24}
+            label={(props: { x?: number; y?: number; width?: number; height?: number; value?: number }) => {
+              const { x, y, width, height, value } = props
+              if (x == null || y == null || width == null || height == null || value == null) return <g />
+              return (
+                <text
+                  x={x + width + 6}
+                  y={y + height / 2}
+                  dominantBaseline="middle"
+                  fill={theme.label.fill}
+                  stroke={theme.label.stroke}
+                  strokeWidth={3}
+                  paintOrder="stroke"
+                  fontSize={11}
+                  fontWeight={700}
+                >
+                  {valueText(value)}
+                </text>
+              )
+            }}
+          >
+            {data.map((r) => (
+              <Cell
+                key={r.id}
+                fill={r.id === anchorId ? (isSavings ? theme.series.drop : theme.series.unitPrice) : neutralBar(theme.dark)}
+              />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+/* ============ 升档判断：一张卡说清一档升级值不值 ============ */
+
+/** 升档卡片：多花 / 多得 / 每单位变化 + 最醒目的「净省」金额 */
+function UpgradeCard({ m }: { m: MarginInsight }) {
+  const style = GRADE_STYLE[m.grade]
+  const unitLabel = displayUnit(m.unit)
+  const pct = m.unitPriceDropPct
+  return (
+    <div
+      className={`rounded-2xl border border-edge p-4 ${style.row}`}
+      style={{ borderLeft: `3px solid ${style.bar}` }}
+    >
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap text-sm">
+            <span className="text-slate-500 truncate max-w-[150px]" title={m.fromName}>{shortSpec(m.fromName)}</span>
+            <span className="text-slate-400">→</span>
+            <span className="font-semibold truncate max-w-[180px]" title={m.toName}>{shortSpec(m.toName)}</span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.badge}`}>{style.label}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+            <span>多花 <b className="tabular text-slate-600">{fmt.yuan(m.extraCost)}</b></span>
+            <span>多得 <b className="tabular text-slate-600">{fmt.num(displayQuantity(m.extraQuantity, m.unit))}{unitLabel}</b></span>
+            <span>
+              每{unitLabel}
+              <b className={`tabular ml-1 ${pct > 0 ? 'text-emerald-500' : pct < 0 ? 'text-amber-500' : 'text-slate-500'}`}>
+                {pct > 0 ? `便宜 ${pct.toFixed(1)}%` : pct < 0 ? `反贵 ${Math.abs(pct).toFixed(1)}%` : '持平'}
+              </b>
+            </span>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-xs text-slate-500">{m.netSaving >= 0 ? '净省（白赚）' : '净多花'}</div>
+          <div className={`text-2xl font-bold tabular ${m.netSaving >= 0 ? 'text-emerald-500' : 'text-amber-500'}`}>
+            {fmt.yuan(Math.abs(m.netSaving))}
+          </div>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-slate-400 leading-relaxed">{m.verdict}</p>
+    </div>
+  )
+}
+
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
   const { items, best, margins, warnings, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
@@ -270,11 +488,16 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     setView(v)
   }
 
+  // 主视觉类型：四种候选编码方式，默认「每单位单价」最直接
+  const [visual, setVisual] = useState<VisualKind>('price')
+  // 逐档明细表默认收起：升档卡片已把结论说完，明细按需展开
+  const [showMarginTable, setShowMarginTable] = useState(false)
+  // 完整排名表默认收起：报告先给结论，明细按需展开
+  const [showDetail, setShowDetail] = useState(false)
+
   // 全量视图分组折叠：与工作台一致的工具栏 + 可点击分组标题行
   const [groupBy, setGroupBy] = useState<FullGroupBy | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  // 单价对比图类型：阶梯折线（看拐点）/ 同轴分组柱（看差距）/ 气泡散点（看规模效率）
-  const [chartKind, setChartKind] = useState<'step' | 'grouped' | 'bubble'>('step')
   const toggleGroup = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -339,30 +562,60 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 决策单元：簇视图按簇，全量视图按单个规格
   const decisionUnits = view === 'cluster' ? clusters : null
 
-  // 多维能力雷达数据：簇视图取各簇代表成员（最省钱），全量视图取排名前 5。
-  // 需 ≥2 个参数维度 + ≥2 个对比对象才有雷达意义；dimScores 由 scoreItems 填充（含价格维度 'price'）。
-  const radar = (() => {
-    if (config.dims.length < 2) return null
-    const pool = view === 'cluster' && decisionUnits
-      ? decisionUnits.map((c) => c.members[0]).filter((m): m is ComputedSku => Boolean(m))
-      : items
-    const top = pool.slice(0, 5)
-    if (top.length < 2) return null
-    const axes = [
-      { key: 'price', label: '价格' },
-      ...config.dims.map((d) => ({ key: d.id, label: d.unit ? `${d.label}(${d.unit})` : d.label })),
-    ]
-    const keys = top.map((it) => `${it.rank}. ${shortLabel(it)}`)
-    const data = axes.map((ax) => {
-      const row: Record<string, string | number> = { dim: ax.label }
-      top.forEach((it, i) => {
-        const v = it.dimScores?.[ax.key]
-        if (typeof v === 'number') row[keys[i]] = Math.round(v * 10) / 10
-      })
-      return row
+  // 主视觉数据：先合并「同价同规格」的口味变体，再统一换算到展示单位（ml→L），
+  // 让「每单位单价」成为全场唯一标尺。省下金额 = 相比全场最贵单价、按本档总量折算。
+  const specRows: SpecRow[] = (() => {
+    const rows: SpecRow[] = mergeVariantSkus(items).map((m) => {
+      const perUnit = displayUnitPrice(m.unitPrice, m.unit)
+      return {
+        id: m.id,
+        name: shortSpec(m.name),
+        fullName: m.name,
+        // 单价保留 4 位小数：升档到"每瓶便宜 0.008 元"这种量级也能看出差别
+        perUnit: Math.round(perUnit * 1e4) / 1e4,
+        qty: displayQuantity(m.totalQuantity, m.unit),
+        per100: perUnit > 0 ? Math.round((100 / perUnit) * 100) / 100 : 0,
+        savings: 0,
+      }
     })
-    return { data, keys }
+    const maxPerUnit = rows.reduce((mx, r) => Math.max(mx, r.perUnit), 0)
+    for (const r of rows) r.savings = Math.round((maxPerUnit - r.perUnit) * r.qty * 100) / 100
+    return rows
   })()
+  // 展示单位标签（L / kg / 件…）：取列表里实际出现的单位换算结果
+  const visualUnit = displayUnit(items[0]?.unit ?? '')
+  // 高亮锚点：优先冠军规格；万一它被合并进同价变体，就退而选单价最低的那条
+  const visualAnchorId =
+    specRows.find((r) => r.id === best?.id)?.id ??
+    specRows.reduce((min, r) => (r.perUnit < min.perUnit ? r : min), specRows[0]).id
+
+  // 一句话结论：把"最划算"折算成「每单位省了多少钱 + 便宜百分之几 + 等量能省多少」，
+  // 不读表格也能直接拿到性价比结论。
+  const oneLiner = (() => {
+    if (specRows.length < 2) return null
+    const anchor = specRows.find((r) => r.id === visualAnchorId)
+    if (!anchor || anchor.perUnit <= 0) return null
+    let worst = specRows[0]
+    for (const r of specRows) if (r.perUnit > worst.perUnit) worst = r
+    if (worst.id === anchor.id) return null
+    const savePerUnit = worst.perUnit - anchor.perUnit
+    return {
+      anchor,
+      worst,
+      savePerUnit,
+      pct: (savePerUnit / worst.perUnit) * 100,
+      vsWorst: savePerUnit * anchor.qty,
+    }
+  })()
+
+  // 主视觉候选（四种编码方式都做出来，后续按效果做减法）
+  const VISUAL_OPTIONS: Array<{ k: VisualKind; label: string; hint: string }> = [
+    { k: 'price', label: '每单位单价', hint: `横条越短越省：同一标尺下每${visualUnit}要花多少钱，虚线是全场平均价。` },
+    { k: 'perYuan', label: '每元买到多少', hint: `横条越长越划算：同样 100 元，这一档能买到多少${visualUnit}。` },
+    { k: 'quadrant', label: '性价比象限', hint: '越靠右下越好：总量更大（右）、每单位更便宜（下）；连线即逐档升档路径。' },
+    { k: 'savings', label: '省下多少钱', hint: '相比全场最贵单价、按本档总量折算，选这一档实际省下的金额（元）。' },
+  ]
+  const activeVisual = VISUAL_OPTIONS.find((o) => o.k === visual) ?? VISUAL_OPTIONS[0]
 
   return (
     <div ref={reportRef} className="space-y-8">
@@ -505,6 +758,30 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </div>
       )}
 
+      {/* ① 一句话结论：不读表格就能拿到的性价比答案 */}
+      {oneLiner && (
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="rounded-2xl border border-brand/30 bg-brand/5 px-5 py-4"
+        >
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-brand mb-1.5">
+            <Lightbulb className="h-3.5 w-3.5" /> 一句话结论
+          </div>
+          <p className="text-sm sm:text-base leading-relaxed text-slate-600">
+            本单最划算：<span className="font-bold text-ink">{oneLiner.anchor.fullName}</span>
+            ，每{visualUnit}只要 <span className="font-bold text-brand tabular">{fmt.priceUnit(oneLiner.anchor.perUnit)}</span>
+            ，比单价最高的「{oneLiner.worst.name}」每{visualUnit}省
+            <span className="font-bold text-emerald-500 tabular"> {fmt.priceUnit(oneLiner.savePerUnit)}</span>
+            （便宜 {oneLiner.pct.toFixed(0)}%）
+            {oneLiner.vsWorst >= 1 && (
+              <>，按同样一档的量买能省 <span className="font-bold text-emerald-500 tabular">≈{fmt.yuan(oneLiner.vsWorst)}</span></>
+            )}
+            。
+          </p>
+        </motion.div>
+      )}
+
       {/* 冠军推荐 */}
       {best && (
         <motion.section
@@ -618,518 +895,310 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         </motion.section>
       )}
 
-      {/* 排名 + 边际效益：大屏左右分栏 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-      {/* 排名（支持簇化简 / 全量切换） */}
-      <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-bold tracking-tight">
-              {view === 'cluster' ? '决策排名（已按规格聚合）' : '完整排名'}
-            </h3>
-            {hasVariants && (
-              <div className="flex rounded-lg border border-edge overflow-hidden text-xs">
-                <button
-                  onClick={() => switchView('cluster')}
-                  className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
-                    view === 'cluster' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
-                  }`}
-                >
-                  <Layers className="h-3.5 w-3.5" /> 简化视图
-                </button>
-                <button
-                  onClick={() => switchView('full')}
-                  className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
-                    view === 'full' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
-                  }`}
-                >
-                  <List className="h-3.5 w-3.5" /> 全部 {items.length} 项
-                </button>
-              </div>
-            )}
-          </div>
-
-          {view === 'cluster' && decisionUnits ? (
-            <>
-              <p className="text-xs text-slate-500 -mt-1">
-                已把仅口味/颜色不同、价格结构一致的 {items.length} 个规格折叠为 {decisionUnits.length} 个决策项，
-                先比价格、再在卡片内挑口味
-              </p>
-              {decisionUnits.map((cluster, idx) => (
-                <ClusterCard key={cluster.key} cluster={cluster} idx={idx} flavorLabel={flavorLabel} />
-              ))}
-            </>
-          ) : (
-            <>
-              {/* 分组折叠工具栏：仅当存在可分组维度时显示 */}
-              {groupOptions.length > 0 && (
-                <div className="flex items-center gap-2 flex-wrap text-xs">
-                  <span className="text-slate-500">分组折叠：</span>
-                  {groupOptions.map((opt) => {
-                    const active = groupBy === opt.key
-                    return (
-                      <button
-                        key={opt.key}
-                        onClick={() => {
-                          setCollapsed(new Set())
-                          setGroupBy(active ? null : opt.key)
-                        }}
-                        className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                          active
-                            ? 'bg-brand/15 text-brand border border-brand/50'
-                            : 'text-slate-400 hover:text-brand-deep border border-edge'
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    )
-                  })}
-                  {groupBy && (
-                    <button
-                      onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}
-                      className="text-slate-500 hover:text-slate-600 ml-1"
-                    >
-                      取消分组
-                    </button>
-                  )}
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[640px]">
-                  <thead>
-                    <tr className="border-b border-edge text-left text-sm text-slate-500">
-                      <th className="px-2 py-2 font-medium text-center">#</th>
-                      <th className="px-2 py-2 font-medium">规格</th>
-                      <th className="px-2 py-2 font-medium text-right">总价</th>
-                      <th className="px-2 py-2 font-medium text-right">总量</th>
-                      <th className="px-2 py-2 font-medium text-right">每{displayUnit(items[0]?.unit ?? '')}</th>
-                      <th className="px-2 py-2 font-medium text-right">每{listPackWord(items)}</th>
-                    </tr>
-                  </thead>
-                  {/* key 随 groupBy 变化，切换分组维度时整体重挂载 */}
-                  <tbody key={groupBy ?? 'none'}>
-                    {(groupBy
-                      ? groupComputedSkus(items, groupBy, flavorLabel)
-                      : [{ key: '__all__', items }]
-                    ).map((group) => {
-                      const isGrouped = groupBy !== null
-                      const isCollapsed = collapsed.has(group.key)
-                      return (
-                        <RankGroupRows
-                          key={group.key}
-                          groupKey={group.key}
-                          groupItems={group.items}
-                          allItems={items}
-                          isGrouped={isGrouped}
-                          isCollapsed={isCollapsed}
-                          onToggle={() => toggleGroup(group.key)}
-                          flavorColorMap={flavorColorMap}
-                        />
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </section>
-
-      {/* 单价对比 & 边际效益 */}
-      {margins.length > 0 && (
-        <section className="glass rounded-2xl p-6">
+      {/* ② 主视觉：围绕「每单位单价」的四种看法，同一份数据同一把标尺 */}
+      {specRows.length >= 2 && (
+        <motion.section
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="glass rounded-2xl p-6"
+        >
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <TrendingDown className="h-5 w-5 text-brand" /> 单价对比 & 边际效益
+            <Scale className="h-5 w-5 text-brand" /> 性价比主视觉
           </h3>
-          {/* 图表类型切换：同一份数据三种看法——阶梯看拐点、分组看差距、气泡看规模效率 */}
-          <div className="flex items-center gap-2 flex-wrap mb-3 text-xs">
-            <span className="text-slate-500">图表类型：</span>
-            {([
-              { k: 'step' as const, label: '单价阶梯' },
-              { k: 'grouped' as const, label: '同轴分组柱' },
-              { k: 'bubble' as const, label: '气泡散点' },
-            ]).map(({ k, label }) => (
+          {/* 视图切换：四种编码方式都保留，后续按实际效果做减法 */}
+          <div className="flex items-center gap-2 flex-wrap mb-3 mt-3 text-xs">
+            <span className="text-slate-500">看法：</span>
+            {VISUAL_OPTIONS.map((opt) => (
               <button
-                key={k}
-                onClick={() => setChartKind(k)}
+                key={opt.k}
+                onClick={() => setVisual(opt.k)}
                 className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                  chartKind === k
+                  visual === opt.k
                     ? 'bg-brand/15 text-brand border border-brand/50'
                     : 'text-slate-400 hover:text-brand-deep border border-edge'
                 }`}
               >
-                {label}
+                {opt.label}
               </button>
             ))}
           </div>
-          <p className="text-xs text-slate-500 mb-5">
-            {chartKind === 'step'
-              ? '阶梯折线：单价随规格升档逐级下探，绿色虚线为相对上一档的单价降幅%（右轴），断崖处即性价比拐点'
-              : chartKind === 'grouped'
-                ? '同轴分组柱：在同一价格坐标下对比「单价」与「升档边际成本」，两柱越接近说明这一档加量越值'
-                : '气泡散点：横轴=总量（越右越大份）、纵轴=单价（越低越省）、气泡=总价（越大气泡越大），右下角小球最划算'}
+          <p className="text-xs text-slate-500 mb-4">{activeVisual.hint}</p>
+
+          <div className="rounded-xl border border-edge bg-brand-soft/20 p-4">
+            <MainVisual
+              kind={visual}
+              rows={specRows}
+              unitLabel={visualUnit}
+              anchorId={visualAnchorId}
+              theme={chartTheme}
+            />
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: chartTheme.series.unitPrice }} />
+              推荐规格
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded-sm" style={{ background: neutralBar(chartTheme.dark) }} />
+              其余规格
+            </span>
+            {visual === 'quadrant' && (
+              <span className="inline-flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded-full" style={{ background: chartTheme.series.drop }} />
+                最划算点
+              </span>
+            )}
+            <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
+          </div>
+        </motion.section>
+      )}
+
+      {/* ③ 升档值不值：一档一张卡，把「多花多少钱、多拿多少量、净省多少」说清 */}
+      {margins.length > 0 && (
+        <section className="glass rounded-2xl p-6">
+          <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-brand" /> 升档值不值
+          </h3>
+          <p className="text-xs text-slate-500 mb-4">
+            按总量从小到大逐档比较：<b className="text-slate-600">净省（白赚）</b> 是「这一档多拿的量，按上一档单价折算成钱，减去你多花的钱」——
+            为正说明加量把多花的钱赚回来了，越大越值得升。
           </p>
 
-          {/* 单价对比图：单价与边际成本统一按展示单位换算（ml→L），避免一长串小数看不清量级 */}
-          <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
-            <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              {chartKind === 'step' && (
-                <>
-                  <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（阶梯）
-                  <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
-                </>
-              )}
-              {chartKind === 'grouped' && (
-                <>
-                  <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价
-                  <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本
-                </>
-              )}
-              {chartKind === 'bubble' && (
-                <>
-                  <span className="inline-block w-3 h-3 rounded-full bg-brand" /> 一个气泡 = 一个规格（越大总价越高）
-                </>
-              )}
-              <span className="text-slate-400 dark:text-slate-500">· 按总量升序=升档顺序</span>
-            </div>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                {(() => {
-                  const merged = mergeVariantSkus(items)
-                  const chartData = merged.map((m, i) => {
-                    const margin = i === 0 ? null : margins.find((x) => x.toId === m.id)
-                    const { spec } = parseFlavor(m.name)
-                    const label =
-                      spec && spec.length <= 20
-                        ? spec.length > 8
-                          ? spec.slice(0, 8) + '…'
-                          : spec
-                        : m.name.length > 8
-                          ? m.name.slice(0, 8) + '…'
-                          : m.name
-                    // 单价 / 边际成本都从「每基准单位」换算成「每展示单位」（ml→L）。
-                    // 不做换算的话纵轴全是 0.003 这类小数点后的数字，读不出量级。
-                    const perUnit = displayUnitPrice(m.unitPrice, m.unit)
-                    const marginPerUnit =
-                      margin && margin.extraQuantity > 0
-                        ? displayUnitPrice(round6(margin.extraCost / margin.extraQuantity), m.unit)
-                        : null
-                    return {
-                      name: label,
-                      fullName: m.name,
-                      单价: round6(perUnit),
-                      边际成本: marginPerUnit == null ? null : round6(marginPerUnit),
-                      降幅: margin ? margin.unitPriceDropPct : null,
-                      总量: displayQuantity(m.totalQuantity, m.unit),
-                      总价: m.price,
-                    }
-                  })
-                  const tooltipLabel = (value: unknown, payload?: Array<{ payload?: { fullName?: string } }>) =>
-                    payload?.[0]?.payload?.fullName ?? String(value)
-
-                  // 气泡散点：横轴=总量、纵轴=单价、气泡大小=总价，看「规模-单价」的整体分布
-                  if (chartKind === 'bubble') {
-                    return (
-                      <ScatterChart data={chartData} margin={{ top: 28, right: 28, bottom: 44, left: 8 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
-                        <XAxis
-                          type="number"
-                          dataKey="总量"
-                          name="总量"
-                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                          tickFormatter={(v) => fmt.num(v)}
-                          label={{ value: '总量（越大份 →）', position: 'insideBottom', offset: -28, fill: chartTheme.tick, fontSize: 11 }}
-                        />
-                        <YAxis
-                          type="number"
-                          dataKey="单价"
-                          name="单价"
-                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                          tickFormatter={(v) => `¥${v}`}
-                          width={60}
-                          label={{ value: '单价', angle: -90, position: 'insideLeft', fill: chartTheme.tick, fontSize: 11 }}
-                        />
-                        <ZAxis type="number" dataKey="总价" range={[80, 520]} name="总价" />
-                        <Tooltip
-                          cursor={{ strokeDasharray: '3 3' }}
-                          contentStyle={chartTheme.tooltipStyle}
-                          labelStyle={chartTheme.tooltipLabelStyle}
-                          itemStyle={chartTheme.tooltipItemStyle}
-                          labelFormatter={tooltipLabel}
-                          formatter={(value, name) => {
-                            const num = typeof value === 'number' ? value : Number(value)
-                            if (name === '单价') return [fmt.priceUnit(num), name]
-                            if (name === '总价') return [fmt.yuan(num), name]
-                            return [fmt.num(num), name]
-                          }}
-                        />
-                        <Scatter name="规格" data={chartData} fill={chartTheme.series.unitPrice} fillOpacity={0.55} />
-                      </ScatterChart>
-                    )
-                  }
-
-                  return (
-                    <ComposedChart data={chartData} margin={{ top: 36, right: 52, bottom: 8, left: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
-                      <XAxis
-                        dataKey="name"
-                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                        interval={0}
-                        angle={-30}
-                        textAnchor="end"
-                        height={64}
-                      />
-                      <YAxis
-                        yAxisId="price"
-                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                        tickFormatter={(v) => `¥${v}`}
-                        width={56}
-                      />
-                      {/* 只有阶梯图用右轴（降幅%）；分组柱两系列同轴，不需要第二根轴 */}
-                      {chartKind === 'step' && (
-                        <YAxis
-                          yAxisId="pct"
-                          orientation="right"
-                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                          tickFormatter={(v) => `${v}%`}
-                          width={44}
-                          domain={[0, 'dataMax']}
-                        />
-                      )}
-                      <Tooltip
-                        cursor={{ fill: chartTheme.cursorFill }}
-                        contentStyle={chartTheme.tooltipStyle}
-                        labelStyle={chartTheme.tooltipLabelStyle}
-                        itemStyle={chartTheme.tooltipItemStyle}
-                        labelFormatter={tooltipLabel}
-                        formatter={(value, name) => {
-                          const num = typeof value === 'number' ? value : Number(value)
-                          if (name === '降幅') return [`${num}%`, name]
-                          return [fmt.priceUnit(num), name]
-                        }}
-                      />
-                      {chartKind === 'step' ? (
-                        <>
-                          <Line
-                            yAxisId="price"
-                            dataKey="单价"
-                            type="stepAfter"
-                            stroke={chartTheme.series.unitPrice}
-                            strokeWidth={2.6}
-                            dot={{ r: 4, fill: chartTheme.series.unitPrice }}
-                            label={(props: { x?: number; y?: number; value?: number }) => {
-                              const { x, y, value } = props
-                              if (x == null || y == null || value == null) return <g />
-                              return (
-                                <text
-                                  x={x}
-                                  y={y - 10}
-                                  fill={chartTheme.label.fill}
-                                  stroke={chartTheme.label.stroke}
-                                  strokeWidth={3}
-                                  paintOrder="stroke"
-                                  fontSize={11}
-                                  fontWeight={700}
-                                  textAnchor="middle"
-                                >
-                                  {fmt.priceUnit(value)}
-                                </text>
-                              )
-                            }}
-                          />
-                          <Line
-                            yAxisId="pct"
-                            dataKey="降幅"
-                            stroke={chartTheme.series.drop}
-                            strokeWidth={2}
-                            strokeDasharray="4 4"
-                            connectNulls
-                            dot={{ r: 3, fill: chartTheme.series.drop }}
-                          />
-                        </>
-                      ) : (
-                        <>
-                          <Bar
-                            yAxisId="price"
-                            dataKey="单价"
-                            fill={chartTheme.series.unitPrice}
-                            radius={[6, 6, 0, 0]}
-                            maxBarSize={40}
-                            label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
-                              const { x, y, width, value } = props
-                              if (x == null || y == null || width == null || value == null) return <g />
-                              return (
-                                <text
-                                  x={x + width / 2}
-                                  y={y - 8}
-                                  fill={chartTheme.label.fill}
-                                  stroke={chartTheme.label.stroke}
-                                  strokeWidth={3}
-                                  paintOrder="stroke"
-                                  fontSize={11}
-                                  fontWeight={700}
-                                  textAnchor="middle"
-                                >
-                                  {fmt.priceUnit(value)}
-                                </text>
-                              )
-                            }}
-                          />
-                          <Bar
-                            yAxisId="price"
-                            dataKey="边际成本"
-                            fill={chartTheme.series.margin}
-                            radius={[6, 6, 0, 0]}
-                            maxBarSize={40}
-                            label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
-                              const { x, y, width, value } = props
-                              if (x == null || y == null || width == null || value == null) return <g />
-                              return (
-                                <text
-                                  x={x + width / 2}
-                                  y={y - 8}
-                                  fill={chartTheme.label.fill}
-                                  stroke={chartTheme.label.stroke}
-                                  strokeWidth={3}
-                                  paintOrder="stroke"
-                                  fontSize={11}
-                                  fontWeight={700}
-                                  textAnchor="middle"
-                                >
-                                  {fmt.priceUnit(value)}
-                                </text>
-                              )
-                            }}
-                          />
-                        </>
-                      )}
-                    </ComposedChart>
-                  )
-                })()}
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* 表格：精细分级 + 关键指标。评级合并到规格列（左侧色条 + 标签），省一列宽度 */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[520px]">
-              <thead>
-                <tr className="border-b border-edge text-left text-sm text-slate-500">
-                  <th className="px-2 py-2 font-medium">规格</th>
-                  <th className="px-2 py-2 font-medium text-right">多花</th>
-                  <th className="px-2 py-2 font-medium text-right">多得</th>
-                  <th className="px-2 py-2 font-medium text-right">单价变化</th>
-                  <th className="px-2 py-2 font-medium text-right">多花1元多得</th>
-                </tr>
-              </thead>
-              <tbody>
-                {margins.map((m, i) => {
-                  const style = GRADE_STYLE[m.grade]
-                  // 拆分规格名：优先显示关键规格部分（如 16g×8袋），口味作为副标题
-                  const { flavor, spec } = parseFlavor(m.toName)
-                  const showShort = spec && spec.length <= 20
-                  // 多花1元能多买多少量 = 多得的量 / 多花的钱（边际效率）
-                  const perExtraYuan = m.extraCost > 0 ? m.extraQuantity / m.extraCost : 0
-                  return (
-                    <tr
-                      key={i}
-                      className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${style.row}`}
-                    >
-                      {/* 规格 + 评级合并：左侧 3px 色条标识分级，规格名后跟评级标签 */}
-                      <td className="px-2 py-2.5" style={{ borderLeft: `3px solid ${style.bar}` }}>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium truncate max-w-[180px]" title={m.toName}>
-                            {showShort ? spec : m.toName}
-                          </span>
-                          {showShort && flavor && (
-                            <span className="text-sm text-slate-500 truncate max-w-[140px]">{flavor}</span>
-                          )}
-                          <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.badge}`}>
-                            {style.label}
-                          </span>
-                        </div>
-                        <div className="text-sm text-slate-500 mt-0.5">{m.verdict}</div>
-                      </td>
-                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
-                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(displayQuantity(m.extraQuantity, m.unit))}{displayUnit(m.unit)}</td>
-                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-brand' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                        {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
-                      </td>
-                      <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">
-                        {perExtraYuan > 0 ? `${fmt.num(displayQuantity(perExtraYuan, m.unit))}${displayUnit(m.unit)}` : '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* 图例 */}
-          <div className="mt-4 flex flex-wrap gap-3 text-sm text-slate-500">
-            {Object.entries(GRADE_STYLE).map(([k, v]) => (
-              <span key={k} className="inline-flex items-center gap-1">
-                <span className={`inline-block w-2.5 h-2.5 rounded-sm ${v.dot}`} />
-                {v.label}
-              </span>
+          <div className="space-y-3">
+            {margins.map((m, i) => (
+              <UpgradeCard key={`${m.fromId}-${m.toId}-${i}`} m={m} />
             ))}
           </div>
 
-          {/* 避坑提示：紧贴边际分析下方，下单前看清潜在陷阱 */}
-          <div className="mt-6 pt-6 border-t border-edge/60">
-            <h4 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-400" /> 避坑提示
-            </h4>
-            <ul className="space-y-2">
-              {warnings.map((w, i) => (
-                <li key={i} className="flex gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-      )}
-      </div>
+          {/* 逐档明细表：结论已在卡片里，明细默认收起 */}
+          <button
+            onClick={() => setShowMarginTable((v) => !v)}
+            className="mt-4 text-xs text-slate-500 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
+          >
+            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showMarginTable ? 'rotate-180' : ''}`} />
+            {showMarginTable ? '收起逐档明细' : `展开逐档明细（${margins.length} 档）`}
+          </button>
 
-      {/* 多维能力雷达：簇视图取簇代表，全量视图取前 5 名 */}
-      {radar && (
-        <section className="glass rounded-2xl p-6">
-          <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <RadarIcon className="h-5 w-5 text-brand" /> 多维能力对比
-          </h3>
-          <p className="text-xs text-slate-500 mb-5">
-            {view === 'cluster' ? '每个簇取最省钱成员为代表 · ' : '展示排名前 5 的规格 · '}
-            各维度按 0-100 归一化（价格维度单价越低分越高），覆盖面积越大越全面占优
-          </p>
-          <div className="h-96">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadarChart data={radar.data} cx="50%" cy="50%" outerRadius="70%">
-                <PolarGrid stroke={chartTheme.grid} />
-                <PolarAngleAxis dataKey="dim" tick={{ fill: chartTheme.tick, fontSize: 12 }} />
-                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
-                {radar.keys.map((k, i) => (
-                  <Radar
-                    key={k}
-                    name={k}
-                    dataKey={k}
-                    stroke={chartTheme.radar[i % chartTheme.radar.length]}
-                    fill={chartTheme.radar[i % chartTheme.radar.length]}
-                    fillOpacity={0.12}
-                    strokeWidth={2}
-                  />
+          {showMarginTable && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs min-w-[520px]">
+                <thead>
+                  <tr className="border-b border-edge text-left text-sm text-slate-500">
+                    <th className="px-2 py-2 font-medium">规格</th>
+                    <th className="px-2 py-2 font-medium text-right">多花</th>
+                    <th className="px-2 py-2 font-medium text-right">多得</th>
+                    <th className="px-2 py-2 font-medium text-right">单价变化</th>
+                    <th className="px-2 py-2 font-medium text-right">净省</th>
+                    <th className="px-2 py-2 font-medium text-right">多花1元多得</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {margins.map((m, i) => {
+                    const style = GRADE_STYLE[m.grade]
+                    // 拆分规格名：优先显示关键规格部分（如 16g×8袋），口味作为副标题
+                    const { flavor, spec } = parseFlavor(m.toName)
+                    const showShort = spec && spec.length <= 20
+                    // 多花1元能多买多少量 = 多得的量 / 多花的钱（边际效率）
+                    const perExtraYuan = m.extraCost > 0 ? m.extraQuantity / m.extraCost : 0
+                    return (
+                      <tr
+                        key={i}
+                        className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${style.row}`}
+                      >
+                        {/* 规格 + 评级合并：左侧 3px 色条标识分级，规格名后跟评级标签 */}
+                        <td className="px-2 py-2.5" style={{ borderLeft: `3px solid ${style.bar}` }}>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium truncate max-w-[180px]" title={m.toName}>
+                              {showShort ? spec : m.toName}
+                            </span>
+                            {showShort && flavor && (
+                              <span className="text-sm text-slate-500 truncate max-w-[140px]">{flavor}</span>
+                            )}
+                            <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${style.badge}`}>
+                              {style.label}
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-500 mt-0.5">{m.verdict}</div>
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
+                        <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(displayQuantity(m.extraQuantity, m.unit))}{displayUnit(m.unit)}</td>
+                        <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-brand' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                          {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
+                        </td>
+                        <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.netSaving >= 0 ? 'text-emerald-500' : 'text-amber-500'}`}>
+                          {m.netSaving >= 0 ? '+' : '−'}{fmt.yuan(Math.abs(m.netSaving))}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">
+                          {perExtraYuan > 0 ? `${fmt.num(displayQuantity(perExtraYuan, m.unit))}${displayUnit(m.unit)}` : '—'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {/* 图例 */}
+              <div className="mt-3 flex flex-wrap gap-3 text-sm text-slate-500">
+                {Object.entries(GRADE_STYLE).map(([k, v]) => (
+                  <span key={k} className="inline-flex items-center gap-1">
+                    <span className={`inline-block w-2.5 h-2.5 rounded-sm ${v.dot}`} />
+                    {v.label}
+                  </span>
                 ))}
-                <Tooltip
-                  contentStyle={chartTheme.tooltipStyle}
-                  labelStyle={chartTheme.tooltipLabelStyle}
-                  itemStyle={chartTheme.tooltipItemStyle}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: chartTheme.tick }} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
+
+      {/* ④ 避坑提示 */}
+      {warnings.length > 0 && (
+        <section className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-5">
+          <h3 className="text-sm font-bold tracking-tight mb-3 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-400" /> 避坑提示
+          </h3>
+          <ul className="space-y-2">
+            {warnings.map((w, i) => (
+              <li key={i} className="flex gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-xs text-slate-600 leading-relaxed">{w}</p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* ⑤ 明细（默认收起）：完整排名表，支持簇化简 / 全量切换与分组折叠 */}
+      <section className="glass rounded-2xl p-6">
+        <button
+          onClick={() => setShowDetail((v) => !v)}
+          className="w-full flex items-center justify-between gap-3 text-left no-print"
+        >
+          <span className="text-lg font-bold tracking-tight flex items-center gap-2">
+            <List className="h-5 w-5 text-brand" /> 完整排名
+            <span className="text-xs font-normal text-slate-500">共 {items.length} 项规格</span>
+          </span>
+          <span className="text-xs text-slate-500 inline-flex items-center gap-1.5 shrink-0">
+            {showDetail ? '收起明细' : '查看明细'}
+            <ChevronDown className={`h-4 w-4 transition-transform ${showDetail ? 'rotate-180' : ''}`} />
+          </span>
+        </button>
+
+        {showDetail && (
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h4 className="text-sm font-bold tracking-tight">
+                {view === 'cluster' ? '决策排名（已按规格聚合）' : '全部规格'}
+              </h4>
+              {hasVariants && (
+                <div className="flex rounded-lg border border-edge overflow-hidden text-xs">
+                  <button
+                    onClick={() => switchView('cluster')}
+                    className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
+                      view === 'cluster' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
+                    }`}
+                  >
+                    <Layers className="h-3.5 w-3.5" /> 简化视图
+                  </button>
+                  <button
+                    onClick={() => switchView('full')}
+                    className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
+                      view === 'full' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
+                    }`}
+                  >
+                    <List className="h-3.5 w-3.5" /> 全部 {items.length} 项
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {view === 'cluster' && decisionUnits ? (
+              <>
+                <p className="text-xs text-slate-500">
+                  已把仅口味/颜色不同、价格结构一致的 {items.length} 个规格折叠为 {decisionUnits.length} 个决策项，
+                  先比价格、再在卡片内挑口味
+                </p>
+                {decisionUnits.map((cluster, idx) => (
+                  <ClusterCard key={cluster.key} cluster={cluster} idx={idx} flavorLabel={flavorLabel} />
+                ))}
+              </>
+            ) : (
+              <>
+                {/* 分组折叠工具栏：仅当存在可分组维度时显示 */}
+                {groupOptions.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap text-xs">
+                    <span className="text-slate-500">分组折叠：</span>
+                    {groupOptions.map((opt) => {
+                      const active = groupBy === opt.key
+                      return (
+                        <button
+                          key={opt.key}
+                          onClick={() => {
+                            setCollapsed(new Set())
+                            setGroupBy(active ? null : opt.key)
+                          }}
+                          className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                            active
+                              ? 'bg-brand/15 text-brand border border-brand/50'
+                              : 'text-slate-400 hover:text-brand-deep border border-edge'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      )
+                    })}
+                    {groupBy && (
+                      <button
+                        onClick={() => { setCollapsed(new Set()); setGroupBy(null) }}
+                        className="text-slate-500 hover:text-slate-600 ml-1"
+                      >
+                        取消分组
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs min-w-[640px]">
+                    <thead>
+                      <tr className="border-b border-edge text-left text-sm text-slate-500">
+                        <th className="px-2 py-2 font-medium text-center">#</th>
+                        <th className="px-2 py-2 font-medium">规格</th>
+                        <th className="px-2 py-2 font-medium text-right">总价</th>
+                        <th className="px-2 py-2 font-medium text-right">总量</th>
+                        <th className="px-2 py-2 font-medium text-right">每{displayUnit(items[0]?.unit ?? '')}</th>
+                        <th className="px-2 py-2 font-medium text-right">每{listPackWord(items)}</th>
+                      </tr>
+                    </thead>
+                    {/* key 随 groupBy 变化，切换分组维度时整体重挂载 */}
+                    <tbody key={groupBy ?? 'none'}>
+                      {(groupBy
+                        ? groupComputedSkus(items, groupBy, flavorLabel)
+                        : [{ key: '__all__', items }]
+                      ).map((group) => {
+                        const isGrouped = groupBy !== null
+                        const isCollapsed = collapsed.has(group.key)
+                        return (
+                          <RankGroupRows
+                            key={group.key}
+                            groupKey={group.key}
+                            groupItems={group.items}
+                            allItems={items}
+                            isGrouped={isGrouped}
+                            isCollapsed={isCollapsed}
+                            onToggle={() => toggleGroup(group.key)}
+                            flavorColorMap={flavorColorMap}
+                          />
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
