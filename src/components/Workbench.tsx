@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint } from '../lib/types'
-import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
+import { uid, fmt, isStale, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
@@ -182,6 +182,28 @@ function PriceTrendBadge({ history, className = '' }: { history?: PricePoint[]; 
     >
       <Icon className="h-3 w-3 shrink-0" />
       {label}
+    </span>
+  )
+}
+
+/**
+ * 价格新鲜度：把"这条价格是什么时候录的"摆到行上。
+ * 价格点的时间戳此前只写不读，数据看着永远新鲜；超过 STALE_DAYS 未更新时标琥珀色 + 警示图标，
+ * 让"结论可能过期"变得可见。
+ */
+function PriceAgeBadge({ history, className = '' }: { history?: PricePoint[]; className?: string }) {
+  const last = history?.[history.length - 1]
+  if (!last) return null
+  const stale = isStale(last.t)
+  return (
+    <span
+      title={`价格记录于 ${new Date(last.t).toLocaleString('zh-CN')}`}
+      className={`inline-flex items-center gap-0.5 shrink-0 text-[10px] tabular whitespace-nowrap ${
+        stale ? 'text-amber-500 font-medium' : 'text-slate-400'
+      } ${className}`}
+    >
+      {stale && <AlertCircle className="h-3 w-3 shrink-0" />}
+      {fmt.ago(last.t)}
     </span>
   )
 }
@@ -1413,6 +1435,7 @@ function RowFields({ s, idx, update, updateParam, remove, duplicate, indented, d
             className="field py-1.5 text-xs tabular"
           />
           <PriceTrendBadge history={s.priceHistory} />
+          <PriceAgeBadge history={s.priceHistory} />
         </div>
       </td>
       <td className="px-3 py-2">
@@ -1568,6 +1591,7 @@ function SkuRowCard({ s, idx, update, updateParam, remove, duplicate, dims, flav
           <span className="text-[10px] text-slate-400 mb-0.5 flex items-center gap-1">
             总价 ¥
             <PriceTrendBadge history={s.priceHistory} />
+            <PriceAgeBadge history={s.priceHistory} />
           </span>
           <input
             type="number" min={0} step="0.01" value={s.price || ''}

@@ -11,7 +11,7 @@
  *
  * 所有调用方仍以 `from './engine'` / `'../lib/engine'` 引用，拆分对调用方完全透明。
  */
-export { uid, fmt } from './util'
+export { uid, fmt, isStale, STALE_DAYS } from './util'
 
 export {
   UNIT_GROUPS,

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay } from '../lib/engine'
+import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
-  Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown,
+  Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
   Printer, Copy, Check, Radar as RadarIcon, Share2, Minus, ImageDown, Loader2,
 } from 'lucide-react'
 import { motion, AnimatePresence, animate } from 'framer-motion'
@@ -105,6 +105,14 @@ function buildSummaryText(result: DecisionResult, config: DecisionConfig): strin
     `  总价 ${fmt.yuan(best.price)} · 总量 ${fmt.num(best.totalQuantity)}${best.unit}` +
     ` · 每${best.unit} ${fmt.priceUnit(best.unitPrice)} · 综合得分 ${best.score.toFixed(1)}`,
   )
+  // 摘要会被粘贴到别处流转，脱离页面后就看不出数据有多旧了，所以把新鲜度写进正文
+  const priceAt = best.priceHistory?.[best.priceHistory.length - 1]?.t
+  if (priceAt) {
+    lines.push(
+      `  价格记录：${fmt.ago(priceAt)}` +
+      (isStale(priceAt) ? `（已超过 ${STALE_DAYS} 天未更新，结论可能过期）` : ''),
+    )
+  }
   if (reasons.length > 0) {
     lines.push('')
     lines.push('推荐理由：')
@@ -169,6 +177,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 冠军规格的价格走势：跨天变过价（≥2 条记录）时才有，用于提示"现在买是不是比上次贵"
   const bestTrend = priceTrend(best?.priceHistory)
   const TrendIcon = bestTrend?.direction === 'up' ? TrendingUp : bestTrend?.direction === 'down' ? TrendingDown : Minus
+  // 冠军价格最近一次记录的时间：结论是基于"什么时候的价格"必须说清楚。
+  // 注意走势横幅只在 ≥2 条记录时出现，而"过期"只要 1 条记录就能判断，所以这里单独算。
+  const bestPriceAt = best?.priceHistory?.[best.priceHistory.length - 1]?.t
+  const bestStale = isStale(bestPriceAt)
 
   // 导出整份报告为 PNG：依赖 html-to-image，按需动态加载（见 lib/exportImage）
   const reportRef = useRef<HTMLDivElement>(null)
@@ -544,6 +556,30 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <span className="text-slate-400">
                         （{bestTrend.points.length} 次记录 · {fmtPointDay(bestTrend.points[0].t)} 起）
                       </span>
+                    </span>
+                  </div>
+                )}
+
+                {/* 数据新鲜度：把"结论基于何时录的价格"摆到冠军卡片上。
+                    只写不读的时间戳会让结论看着永远新鲜，过期时必须显式标黄。 */}
+                {bestPriceAt && (
+                  <div
+                    className={`mt-3 flex items-start gap-1.5 rounded-xl border px-3 py-1.5 text-xs leading-relaxed ${
+                      bestStale
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                        : 'border-edge bg-panel/60 text-slate-500'
+                    }`}
+                  >
+                    {bestStale
+                      ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      : <RefreshCw className="h-3.5 w-3.5 shrink-0 mt-0.5" />}
+                    <span>
+                      冠军价格记录于 {fmt.ago(bestPriceAt)}
+                      {bestStale && (
+                        <span className="font-medium">
+                          （已超过 {STALE_DAYS} 天未更新，结论可能过期，建议重新核对价格）
+                        </span>
+                      )}
                     </span>
                   </div>
                 )}

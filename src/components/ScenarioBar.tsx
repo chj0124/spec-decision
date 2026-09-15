@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, Plus, Pencil, Trash2, Check, X, AlertTriangle, Download, Upload } from 'lucide-react'
+import { fmt } from '../lib/engine'
 
 export interface ScenarioSummary {
   id: string
   name: string
   count: number
+  /** 最后一次改动该清单的时间（新建 / 改名 / 改数据都会刷新），用于提示"多久没动了" */
+  updatedAt: number
 }
 
 interface Props {
@@ -125,12 +128,22 @@ export default function ScenarioBar({
                   : 'border-edge text-slate-500 hover:border-brand/50 hover:text-brand-deep'
               }`}
             >
-              <button onClick={() => onSwitch(s.id)} className="max-w-[9rem] truncate font-medium" title={s.name}>
+              <button
+                onClick={() => onSwitch(s.id)}
+                className="max-w-[9rem] truncate font-medium"
+                title={`${s.name} · ${s.count} 个规格 · 更新于 ${new Date(s.updatedAt).toLocaleString('zh-CN')}`}
+              >
                 {s.name}
               </button>
               <span className={`tabular text-[10px] ${isActive ? 'text-white/70' : 'text-slate-400'}`}>
                 {s.count}
               </span>
+              {/* 只在激活项上露出"多久没动过"：非激活项空间太挤，精确时间放在 hover 的 title 里 */}
+              {isActive && (
+                <span className="tabular text-[10px] text-white/60 whitespace-nowrap">
+                  {fmt.ago(s.updatedAt)}
+                </span>
+              )}
               {isActive && (
                 <>
                   <button

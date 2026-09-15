@@ -8,6 +8,95 @@ const MIGRATED_KEY = 'spec-decision:migrated-v2'
 const SCENARIOS_KEY = 'spec-decision:scenarios'
 const ACTIVE_KEY = 'spec-decision:active-scenario'
 
+/* ---------- 持久化健康度：写入失败不再静默吞掉 ----------
+ * 页脚承诺"数据仅保存在你的浏览器本地"，那么"没存上"这件事必须让用户知道，
+ * 否则用户会以为数据在，刷新后凭空消失 —— 这是最伤信任的一类失败。 */
+
+/** 写入失败的原因：配额超限 / 存储被禁用（隐私模式、第三方存储拦截）/ 其他 */
+export type PersistFailReason = 'quota' | 'blocked' | 'unknown'
+
+export interface PersistIssue {
+  key: string
+  reason: PersistFailReason
+  at: number
+}
+
+/** 按 localStorage key 记录未恢复的失败，避免"一个键写成功"就把别的键的失败洗掉 */
+const persistIssues = new Map<string, PersistIssue>()
+const persistListeners = new Set<(issue: PersistIssue | null) => void>()
+
+/** 当前最新的未恢复失败；无失败时为 null */
+let persistIssue: PersistIssue | null = null
+
+/** 订阅持久化异常：出现失败时回调 issue，全部恢复时回调 null。返回取消订阅函数 */
+export function onPersistIssue(fn: (issue: PersistIssue | null) => void) {
+  persistListeners.add(fn)
+  return () => {
+    persistListeners.delete(fn)
+  }
+}
+
+/** 当前是否存在未恢复的持久化异常（供非 React 环境读取） */
+export function getPersistIssue(): PersistIssue | null {
+  return persistIssue
+}
+
+/** 清除全部告警（用户手动关闭提示条）；之后若再写入失败会重新出现 */
+export function clearPersistIssues() {
+  if (persistIssues.size === 0) return
+  persistIssues.clear()
+  persistIssue = null
+  persistListeners.forEach((fn) => fn(null))
+}
+
+/** 把底层异常归类，便于给出可执行的提示（清空间 / 换浏览器 / 退出隐私模式） */
+function classifyStorageError(e: unknown): PersistFailReason {
+  if (e instanceof DOMException) {
+    const quota = ['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED', 'QUOTA_EXCEEDED_ERR']
+    if (quota.includes(e.name) || e.code === 22 || e.code === 1014) return 'quota'
+    if (e.name === 'SecurityError' || e.name === 'InvalidAccessError') return 'blocked'
+  }
+  return 'unknown'
+}
+
+function reportIssue(key: string, reason: PersistFailReason) {
+  const issue: PersistIssue = { key, reason, at: Date.now() }
+  persistIssues.set(key, issue)
+  persistIssue = issue
+  persistListeners.forEach((fn) => fn(issue))
+}
+
+function resolveIssue(key: string) {
+  if (!persistIssues.delete(key)) return
+  const rest = [...persistIssues.values()]
+  persistIssue = rest.length > 0 ? rest.reduce((a, b) => (b.at > a.at ? b : a)) : null
+  persistListeners.forEach((fn) => fn(persistIssue))
+}
+
+/** 写入单个键；失败不抛出，而是记录异常并通知订阅者 */
+function write(key: string, value: string): boolean {
+  try {
+    localStorage.setItem(key, value)
+    resolveIssue(key)
+    return true
+  } catch (e) {
+    reportIssue(key, classifyStorageError(e))
+    return false
+  }
+}
+
+/** 序列化后写入；序列化本身失败（循环引用等）同样计入异常而非崩溃 */
+function writeJson(key: string, value: unknown): boolean {
+  let text: string
+  try {
+    text = JSON.stringify(value)
+  } catch {
+    reportIssue(key, 'unknown')
+    return false
+  }
+  return write(key, text)
+}
+
 /** 一份独立清单（场景）：自己的 SKU 列表 + 决策配置，互不干扰 */
 export interface Scenario {
   id: string
@@ -53,20 +142,20 @@ export function loadSkus(): Sku[] {
 }
 
 export function saveSkus(skus: Sku[]) {
-  try {
-    localStorage.setItem(SKU_KEY, JSON.stringify(skus))
-  } catch {
-    /* 忽略写入失败 */
-  }
+  writeJson(SKU_KEY, skus)
 }
 
 export function loadTheme(): Theme {
-  const t = localStorage.getItem(THEME_KEY)
-  return t === 'dark' ? 'dark' : 'light' // 默认浅色（薄荷绿风）
+  try {
+    return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light' // 默认浅色（薄荷绿风）
+  } catch {
+    // 存储被禁用时连读都会抛：降级为默认主题，不能让首屏直接崩
+    return 'light'
+  }
 }
 
 export function saveTheme(t: Theme) {
-  localStorage.setItem(THEME_KEY, t)
+  write(THEME_KEY, t)
 }
 
 export function loadConfig(): DecisionConfig {
@@ -85,11 +174,7 @@ export function loadConfig(): DecisionConfig {
 }
 
 export function saveConfig(c: DecisionConfig) {
-  try {
-    localStorage.setItem(CONFIG_KEY, JSON.stringify(c))
-  } catch {
-    /* 忽略写入失败 */
-  }
+  writeJson(CONFIG_KEY, c)
 }
 
 /**
@@ -130,7 +215,7 @@ export function migrateV1ToV2(): { skus: Sku[]; config: DecisionConfig; changed:
     saveSkus(newSkus)
     saveConfig(newConfig)
   }
-  localStorage.setItem(MIGRATED_KEY, '1')
+  write(MIGRATED_KEY, '1')
   return { skus: newSkus, config: newConfig, changed: true }
 }
 
@@ -206,12 +291,9 @@ export function loadWorkspace(): Workspace {
 }
 
 export function saveWorkspace(ws: Workspace) {
-  try {
-    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(ws))
-    localStorage.setItem(ACTIVE_KEY, ws.activeId)
-  } catch {
-    /* 忽略写入失败（如隐私模式配额超限） */
-  }
+  const okMain = writeJson(SCENARIOS_KEY, ws)
+  // 主数据没写进去时，单独存 activeId 没有意义；两个键各自负责报告 / 恢复自己的异常
+  if (okMain) write(ACTIVE_KEY, ws.activeId)
 }
 
 /* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */

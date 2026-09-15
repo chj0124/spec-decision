@@ -5,18 +5,21 @@ import {
   loadTheme, saveTheme, migrateV1ToV2,
   loadWorkspace, saveWorkspace, newScenario,
   exportWorkspace, importWorkspace,
+  onPersistIssue, getPersistIssue, clearPersistIssues,
 } from './lib/store'
-import type { Scenario, Workspace } from './lib/store'
+import type { Scenario, Workspace, PersistIssue } from './lib/store'
 import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
 import type { ShareData } from './lib/share'
 import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
+import { UNDO_TTL_MS, captureDelete, captureImport, removeScenario, applyUndo } from './lib/undo'
+import type { UndoSlot } from './lib/undo'
 import { useUnitNormalize } from './lib/useUnitNormalize'
 import { unitMixWarning } from './lib/engine'
 import Workbench from './components/Workbench'
 import AiSettings from './components/AiSettings'
 import ScenarioBar from './components/ScenarioBar'
-import { Sun, Moon, LineChart, PencilLine, Settings, Download, Upload, Eye, X } from 'lucide-react'
+import { Sun, Moon, LineChart, PencilLine, Settings, Download, Upload, Eye, X, Undo2 } from 'lucide-react'
 
 // 报告页依赖 recharts（体积较大）且首屏不可见，按需加载以避免拖慢工作台首屏
 const Report = lazy(() => import('./components/Report'))
@@ -50,10 +53,18 @@ export default function App() {
   /** 已解析但待用户确认覆盖的备份；非空时显示导入确认条 */
   const [pendingImport, setPendingImport] = useState<Workspace | null>(null)
   const [backupError, setBackupError] = useState(false)
+  /** 非空表示本地写入失败（配额超限 / 存储被禁用），提示用户改动可能丢，需导出备份 */
+  const [persistIssue, setPersistIssue] = useState<PersistIssue | null>(() => getPersistIssue())
+  /** 最近一次破坏性操作（删除清单 / 覆盖导入）的可回退槽；非空时显示撤销提示条 */
+  const [undo, setUndo] = useState<UndoSlot | null>(null)
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
   const config = shared ? shared.config : active.config
+
+  // 订阅本地写入异常。必须声明在下面那个保存副作用之前：effect 按声明顺序执行，
+  // 这样挂载当次的写入失败才不会被漏掉。
+  useEffect(() => onPersistIssue(setPersistIssue), [])
 
   useEffect(() => saveWorkspace(workspace), [workspace])
 
@@ -86,6 +97,13 @@ export default function App() {
     return () => { cancelled = true }
   }, [])
 
+  // 撤销槽自动过期：留一个明确的时限，避免"看起来还能撤销"却早已被后续操作顶掉
+  useEffect(() => {
+    if (!undo) return
+    const timer = setTimeout(() => setUndo(null), UNDO_TTL_MS)
+    return () => clearTimeout(timer)
+  }, [undo])
+
   const handleSaveAi = (c: AiConfig) => {
     saveAiConfig(c)
     setAiConfig(c)
@@ -116,18 +134,27 @@ export default function App() {
     return { scenarios: [...w.scenarios, sc], activeId: sc.id }
   })
 
+  // 改名也是一次改动，同样刷新 updatedAt，否则清单条上的"多久没动过"会失真
   const renameScenario = (id: string, name: string) =>
     setWorkspace((w) => ({
       ...w,
-      scenarios: w.scenarios.map((s) => (s.id === id ? { ...s, name } : s)),
+      scenarios: w.scenarios.map((s) => (s.id === id ? { ...s, name, updatedAt: Date.now() } : s)),
     }))
 
-  const deleteScenario = (id: string) =>
-    setWorkspace((w) => {
-      if (w.scenarios.length <= 1) return w
-      const scenarios = w.scenarios.filter((s) => s.id !== id)
-      return { scenarios, activeId: w.activeId === id ? scenarios[0].id : w.activeId }
-    })
+  const deleteScenario = (id: string) => {
+    // 先留撤销槽再删：captureDelete 要拿原位置与被删清单的内容，删完就取不到了
+    const slot = captureDelete(workspace, id)
+    if (!slot) return
+    setUndo(slot)
+    setWorkspace((w) => removeScenario(w, id))
+  }
+
+  /** 撤销最近一次破坏性操作（删除清单 / 覆盖导入） */
+  const undoDestructive = () => {
+    if (!undo) return
+    setWorkspace((w) => applyUndo(w, undo))
+    setUndo(null)
+  }
 
   /* ---------- 工作区备份 / 还原 ---------- */
 
@@ -156,6 +183,8 @@ export default function App() {
 
   const confirmImport = () => {
     if (!pendingImport) return
+    // 覆盖导入会整份换掉工作区，先把旧的收进撤销槽
+    setUndo(captureImport(workspace, pendingImport))
     setWorkspace(pendingImport)
     setPendingImport(null)
   }
@@ -286,7 +315,7 @@ export default function App() {
         {/* 清单条：多份清单互相独立；分享视图下隐藏 */}
         {!shared && (
           <ScenarioBar
-            scenarios={workspace.scenarios.map((s) => ({ id: s.id, name: s.name, count: s.skus.length }))}
+            scenarios={workspace.scenarios.map((s) => ({ id: s.id, name: s.name, count: s.skus.length, updatedAt: s.updatedAt }))}
             activeId={workspace.activeId}
             onSwitch={switchScenario}
             onCreate={createScenario}
@@ -295,6 +324,72 @@ export default function App() {
             onExport={exportBackup}
             onImport={handleImportFile}
           />
+        )}
+
+        {/* 撤销槽：删除清单 / 覆盖导入都不可逆，给一个有时限的回退口子 */}
+        {undo && (
+          <div
+            role="status"
+            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-amber-400/40"
+          >
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+              <Undo2 className="h-4 w-4 text-amber-500 shrink-0" />
+              <span>
+                {undo.label}，可在 {UNDO_TTL_MS / 1000} 秒内撤销。
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={undoDestructive}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:opacity-90 transition-opacity"
+              >
+                撤销
+              </button>
+              <button
+                onClick={() => setUndo(null)}
+                className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-amber-500 hover:border-amber-400/50 transition-all"
+                aria-label="关闭撤销提示"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 本地写入失败：数据可能存不下来，必须让用户知道并引导导出备份 */}
+        {persistIssue && (
+          <div
+            role="alert"
+            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-rose-400/40"
+          >
+            <div className="flex items-start sm:items-center gap-2 text-xs text-rose-500 flex-1">
+              <AlertIcon />
+              <span>
+                <strong>本地保存失败</strong>
+                {persistIssue.reason === 'quota'
+                  ? '：浏览器存储空间已满'
+                  : persistIssue.reason === 'blocked'
+                    ? '：浏览器已禁用本地存储（如隐私模式）'
+                    : '：浏览器拒绝了本地存储写入'}
+                ，当前改动<strong>可能无法持久化</strong>。请先导出备份，或清理浏览器空间后重试。
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={exportBackup}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-rose-500 text-white hover:opacity-90 transition-opacity"
+              >
+                导出备份
+              </button>
+              <button
+                onClick={clearPersistIssues}
+                className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-rose-500 hover:border-rose-400/50 transition-all"
+                aria-label="关闭保存失败提示"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
         )}
 
         {/* 分享链接无法解析时的提示 */}
