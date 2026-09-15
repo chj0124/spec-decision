@@ -21,7 +21,7 @@ export {
   unitMixWarning,
 } from './units'
 
-export { parseFlavor, groupSkus, parseSpec, buildSpec } from './spec'
+export { parseFlavor, groupSkus, parseSpec, buildSpec, SPEC_PATTERN } from './spec'
 export type { GroupBy, SpecParts } from './spec'
 
 export {

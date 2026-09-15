@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint } from '../lib/types'
 import { uid, fmt, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
 import { recognizeImages, toSku } from '../lib/recognize'
 import { parseClipboardTable } from '../lib/parseTable'
+import { parseQuickEntry, quickEntryToSku, quickEntryUnitPrice } from '../lib/quickEntry'
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
@@ -13,7 +14,7 @@ import {
   Plus, Trash2, ImagePlus, Loader2,
   Sparkles, ArrowRight, UploadCloud, ChevronDown,
   Sliders, PieChart as PieIcon, X, AlertCircle, Scale,
-  TrendingUp, TrendingDown, Minus,
+  TrendingUp, TrendingDown, Minus, Copy, Zap, ClipboardList, Check,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -69,6 +70,9 @@ const TH_BASE =
 function useSkuRow(s: Sku, update: (id: string, patch: Partial<Sku>) => void) {
   const total = s.quantity * Math.max(1, s.packs)
   const up = total > 0 && s.price > 0 ? s.price / total : 0
+  // 每件价：整箱商品的直觉单位 ——「这箱 24 瓶、¥49.7，合下来一瓶多少」。
+  // 每单位价（每 ml）适合跨规格比，每件价适合判断"这箱到底贵不贵"，两者互补。
+  const packPrice = s.price > 0 && s.packs > 0 ? s.price / Math.max(1, s.packs) : 0
   const incomplete = !(s.price > 0 && s.quantity > 0 && s.packs > 0)
   const { flavor, spec } = parseFlavor(s.name)
 
@@ -98,7 +102,7 @@ function useSkuRow(s: Sku, update: (id: string, patch: Partial<Sku>) => void) {
     update(s.id, { [field]: value, name })
   }
 
-  return { total, up, incomplete, flavor, spec, setName, handleSpec, handleField }
+  return { total, up, packPrice, incomplete, flavor, spec, setName, handleSpec, handleField }
 }
 
 /** 维度值输入控件：按维度类型渲染 数字 / 是否 / 评级（桌面表格行与移动端卡片共用） */
@@ -265,6 +269,18 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const remove = (id: string) => onChange(skus.filter((s) => s.id !== id))
   const add = () => onChange([...skus, emptySku()])
 
+  /**
+   * 同款复制：比价里绝大多数场景是「同一个商品的不同规格」（三种芬达、两档咖啡），
+   * 复制一份只改规格与价格，省掉重填口味/单位/维度。
+   * 价格历史不跟着复制 —— 它记录的是原行自己的价格变动，跟过去会让涨跌徽标说谎。
+   */
+  const duplicate = (id: string) => {
+    const i = skus.findIndex((s) => s.id === id)
+    if (i < 0) return
+    const copy: Sku = { ...skus[i], id: uid(), priceHistory: undefined }
+    onChange([...skus.slice(0, i + 1), copy, ...skus.slice(i + 1)])
+  }
+
   // 表格键盘导航：Enter 跳下一格，Ctrl/Cmd+Enter 快速加行并聚焦新行首格
   const tableRef = useRef<HTMLTableElement>(null)
   const focusNewRow = useRef(false)
@@ -316,6 +332,44 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       setGenLoading(false)
     }
   }
+
+  // ============ 极速录入：把「一行一条规格」的文字直接贴进来 ============
+  // 逐格填一行要动 6 个输入框，但比价的数据源头本来就是文字（商品标题、聊天记录、备忘录）。
+  // 让用户先把文字翻译成格子是纯浪费，这里直接把文字贴进来解析成行。
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [quickText, setQuickText] = useState('')
+  const [quickFlavor, setQuickFlavor] = useState('')
+  const quickRef = useRef<HTMLDivElement>(null)
+
+  const quickItems = useMemo(
+    () => (quickOpen ? parseQuickEntry(quickText, quickFlavor) : []),
+    [quickOpen, quickText, quickFlavor],
+  )
+  const quickOk = quickItems.filter((i) => i.ok)
+
+  // 预览里就把「谁最划算」算出来，省得导入后还要翻到报告里回看。
+  // 只有 2 条以上有效单价才标注，否则"最划算"只是个自封的头衔。
+  const quickBest = useMemo(() => {
+    const cands = quickItems
+      .map((it, i) => ({ i, v: quickEntryUnitPrice(it) }))
+      .filter((x) => x.v > 0)
+    if (cands.length < 2) return -1
+    return cands.reduce((a, b) => (b.v < a.v ? b : a)).i
+  }, [quickItems])
+
+  const confirmQuickImport = (mode: 'append' | 'replace') => {
+    if (quickOk.length === 0) return
+    const rows = quickOk.map(quickEntryToSku)
+    onChange(mode === 'replace' ? rows : [...skus, ...rows])
+    setQuickText('')
+    setQuickFlavor('')
+    setQuickOpen(false)
+  }
+
+  // 空状态里的入口离面板很远，打开时滚过去，避免用户以为没反应
+  useEffect(() => {
+    if (quickOpen) quickRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [quickOpen])
 
   // ============ 维度管理 ============
   const addDim = () => {
@@ -595,6 +649,17 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
         <div className="flex flex-wrap gap-2">
           <button
+            onClick={() => setQuickOpen((v) => !v)}
+            className={`px-3 py-2 rounded-lg border text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              quickOpen
+                ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-600 dark:text-emerald-300'
+                : 'bg-emerald-500/10 border-emerald-400/30 text-emerald-600 dark:text-emerald-300 hover:shadow-glow'
+            }`}
+            title="一行一条：规格 + 价格，整段商品标题直接粘贴也行"
+          >
+            <Zap className="h-3.5 w-3.5" /> 极速录入
+          </button>
+          <button
             onClick={handleGenExample}
             disabled={genLoading}
             className="px-3 py-2 rounded-lg bg-gradient-to-r from-violet-500/20 to-fuchsia-500/20 border border-violet-400/40 text-xs font-semibold text-violet-300 hover:shadow-glow transition-all flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-wait"
@@ -622,6 +687,133 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           />
         </div>
       </div>
+
+      {/* 极速录入面板：一行一条「规格 价格」，粘贴即解析，入表前先看清谁划算 */}
+      <AnimatePresence>
+        {quickOpen && (
+          <motion.div
+            ref={quickRef}
+            key="quick"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="text-sm font-semibold flex items-center gap-1.5">
+                  <Zap className="h-4 w-4 text-emerald-500" /> 文本极速录入
+                </span>
+                <span className="text-xs text-slate-400">一行一条，规格 + 价格，顺序不限</span>
+                <label className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-[10px] text-slate-400 whitespace-nowrap">统一口味</span>
+                  <input
+                    value={quickFlavor}
+                    onChange={(e) => setQuickFlavor(e.target.value)}
+                    placeholder={flavorLabel}
+                    className="field py-1 text-xs w-28"
+                  />
+                </label>
+                <button
+                  onClick={() => setQuickOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                  aria-label="关闭极速录入"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <textarea
+                value={quickText}
+                onChange={(e) => setQuickText(e.target.value)}
+                rows={4}
+                spellCheck={false}
+                placeholder={'每行一条，例如：\n300ml*12瓶*2箱 27.91\n券后¥49.7 无糖芬达 500ml*24瓶\n888ml*12 34.4'}
+                className="field py-2 text-xs font-mono resize-y min-h-[88px]"
+              />
+
+              {quickItems.length > 0 && (
+                <div className="rounded-xl border border-edge divide-y divide-edge/60 overflow-hidden">
+                  {quickItems.map((it, i) => (
+                    <div key={i} className={`px-3 py-2 ${it.ok ? '' : 'bg-amber-400/[0.06]'}`}>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-mono text-slate-400 shrink-0">
+                          {String(i + 1).padStart(2, '0')}
+                        </span>
+                        {it.ok ? (
+                          <>
+                            <span className="font-medium truncate">{it.name}</span>
+                            <span className="ml-auto shrink-0 tabular text-slate-500">
+                              {it.price > 0 ? fmt.yuan(it.price) : '待补价'}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-slate-400 truncate">{it.raw}</span>
+                        )}
+                      </div>
+                      {it.ok && (
+                        <div className="mt-1 pl-7 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                          <span className="tabular">
+                            总量 {fmt.num(it.quantity * Math.max(1, it.packs))}{it.unit}
+                          </span>
+                          <span className="text-slate-400">·</span>
+                          <span className="tabular">
+                            {it.price > 0
+                              ? `${fmt.priceUnit(quickEntryUnitPrice(it))}/${it.unit}`
+                              : '单价待补'}
+                          </span>
+                          {i === quickBest && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 font-semibold">
+                              最划算
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {it.note && (
+                        <div className="mt-1 pl-7 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-300">
+                          <AlertCircle className="h-3 w-3 shrink-0" />{it.note}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-500">
+                  识别出{' '}
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold tabular">
+                    {quickOk.length}
+                  </span>{' '}
+                  条可用
+                  {quickItems.length > quickOk.length &&
+                    `，另有 ${quickItems.length - quickOk.length} 条需要补一下规格`}
+                </span>
+                <div className="ml-auto flex flex-wrap gap-2">
+                  {skus.length > 0 && (
+                    <button
+                      onClick={() => confirmQuickImport('replace')}
+                      disabled={quickOk.length === 0}
+                      className="px-3 py-1.5 rounded-lg text-xs text-slate-500 border border-edge hover:text-brand-deep hover:border-brand/40 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="丢弃表格里现有的行，只保留上面解析出的结果"
+                    >
+                      清空并导入
+                    </button>
+                  )}
+                  <button
+                    onClick={() => confirmQuickImport('append')}
+                    disabled={quickOk.length === 0}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 border border-emerald-400/40 text-emerald-600 dark:text-emerald-300 hover:shadow-glow transition-all flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                    {quickOk.length > 0 ? `导入 ${quickOk.length} 条` : '导入'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
       {genSummary && !genError && (
@@ -885,6 +1077,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           genLoading={genLoading}
           onGenExample={handleGenExample}
           onPickImage={() => fileRef.current?.click()}
+          onQuickEntry={() => setQuickOpen(true)}
           onAdd={add}
         />
       ) : (
@@ -948,7 +1141,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
         {/* 桌面表格：内部滚动 + 吸附表头；移动端为卡片式录入 */}
         <div className="hidden sm:block overflow-auto max-h-[72vh]">
-          <table ref={tableRef} onKeyDown={handleTableKey} className="w-full text-sm min-w-[960px]">
+          <table ref={tableRef} onKeyDown={handleTableKey} className="w-full text-sm min-w-[1040px]">
             <thead>
               <tr>
                 <th className={`${TH_BASE} w-8`}>#</th>
@@ -965,8 +1158,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   </th>
                 ))}
                 <th className={`${TH_BASE} text-right`}>总量</th>
+                <th className={`${TH_BASE} text-right`}>每件价</th>
                 <th className={`${TH_BASE} text-right`}>每单位价</th>
-                <th className={`${TH_BASE} w-10`} />
+                <th className={`${TH_BASE} w-16`} />
               </tr>
             </thead>
             {/* key 随 groupBy 变化，切换分组维度时整体重挂载，避免旧分组行残留 */}
@@ -987,6 +1181,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                       update={update}
                       updateParam={updateParam}
                       remove={remove}
+                      duplicate={duplicate}
                       dims={config.dims}
                       flavorLabel={flavorLabel}
                       flavorColorMap={flavorColorMap}
@@ -1033,6 +1228,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                         update={update}
                         updateParam={updateParam}
                         remove={remove}
+                        duplicate={duplicate}
                         dims={config.dims}
                         flavorLabel={flavorLabel}
                         flavorColorMap={flavorColorMap}
@@ -1087,6 +1283,7 @@ interface GroupRowsProps {
   update: (id: string, patch: Partial<Sku>) => void
   updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
+  duplicate: (id: string) => void
   dims: ParamDim[]
   flavorLabel: string
   flavorColorMap: Map<string, string>
@@ -1095,9 +1292,9 @@ interface GroupRowsProps {
   hasAnyFlavor: boolean
 }
 
-function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: GroupRowsProps) {
-  // 列数：# + 口味 + 规格 + 总价 + 含量 + 单位 + 数量 + N个维度 + 总量 + 单价 + 操作
-  const colCount = 10 + dims.length
+function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle, update, updateParam, remove, duplicate, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: GroupRowsProps) {
+  // 列数：# + 口味 + 规格 + 总价 + 含量 + 单位 + 数量 + N个维度 + 总量 + 每件价 + 每单位价 + 操作
+  const colCount = 11 + dims.length
   return (
     <>
       {/* 分组标题行（仅分组时显示） */}
@@ -1133,6 +1330,7 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
               updateParam={updateParam}
               remove={remove}
               indented={isGrouped}
+              duplicate={duplicate}
               dims={dims}
               flavorLabel={flavorLabel}
               flavorColorMap={flavorColorMap}
@@ -1154,6 +1352,7 @@ interface RowFieldsProps {
   update: (id: string, patch: Partial<Sku>) => void
   updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
+  duplicate: (id: string) => void
   indented: boolean
   dims: ParamDim[]
   flavorLabel: string
@@ -1163,8 +1362,8 @@ interface RowFieldsProps {
   hasAnyFlavor: boolean
 }
 
-function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: RowFieldsProps) {
-  const { total, up, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
+function RowFields({ s, idx, update, updateParam, remove, duplicate, indented, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: RowFieldsProps) {
+  const { total, up, packPrice, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
 
   // 同口味行用同底色，仅多口味时上色；待补充行保留警告色
   const flavorBg = !incomplete && hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
@@ -1263,6 +1462,13 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
       <td className="px-3 py-2 text-right text-xs text-slate-400 tabular whitespace-nowrap">
         {total > 0 ? `${fmt.num(total)}${s.unit}` : '—'}
       </td>
+      {/* 每件价：整箱商品的直觉单位（"这箱 24 瓶 ¥49.7，合一瓶多少"），与每 ml 价互补 */}
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        <span className={`text-xs font-semibold tabular ${packPrice > 0 ? 'text-slate-600' : 'text-slate-400'}`}>
+          {packPrice > 0 ? fmt.price4(packPrice) : '待补充'}
+        </span>
+        {packPrice > 0 && <span className="text-sm text-slate-500">/{s.packUnit || '件'}</span>}
+      </td>
       <td className="px-3 py-2 text-right whitespace-nowrap">
         <span className={`text-xs font-semibold tabular ${up > 0 ? 'text-brand' : 'text-slate-600'}`}>
           {up > 0 ? fmt.price4(up) : '待补充'}
@@ -1270,13 +1476,23 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         {up > 0 && <span className="text-sm text-slate-500">/{s.unit}</span>}
       </td>
       <td className="px-3 py-2 text-right">
-        <button
-          onClick={() => remove(s.id)}
-          className="text-slate-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-          aria-label="删除此行"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            onClick={() => duplicate(s.id)}
+            className="text-slate-600 hover:text-brand transition-colors opacity-0 group-hover:opacity-100"
+            aria-label="复制此行"
+            title="同款复制：只改规格与价格"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => remove(s.id)}
+            className="text-slate-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+            aria-label="删除此行"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
       </td>
     </motion.tr>
   )
@@ -1290,6 +1506,7 @@ interface SkuRowCardProps {
   update: (id: string, patch: Partial<Sku>) => void
   updateParam: (id: string, dimId: string, value: ParamValue) => void
   remove: (id: string) => void
+  duplicate: (id: string) => void
   dims: ParamDim[]
   flavorLabel: string
   flavorColorMap: Map<string, string>
@@ -1298,8 +1515,8 @@ interface SkuRowCardProps {
   hasAnyFlavor: boolean
 }
 
-function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: SkuRowCardProps) {
-  const { total, up, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
+function SkuRowCard({ s, idx, update, updateParam, remove, duplicate, dims, flavorLabel, flavorColorMap, dimColorMaps, dimHasGroup, hasAnyFlavor }: SkuRowCardProps) {
+  const { total, up, packPrice, incomplete, flavor, spec, setName, handleSpec, handleField } = useSkuRow(s, update)
   const flavorBg = !incomplete && hasAnyFlavor && flavor ? flavorColorMap.get(flavor) ?? '' : ''
 
   return (
@@ -1328,6 +1545,14 @@ function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, fl
           title="改这里会同步 含量/单位/数量"
           className="field py-1.5 text-xs font-medium flex-[1.3] min-w-0"
         />
+        <button
+          onClick={() => duplicate(s.id)}
+          className="text-slate-400 hover:text-brand transition-colors shrink-0"
+          aria-label="复制此行"
+          title="同款复制：只改规格与价格"
+        >
+          <Copy className="h-4 w-4" />
+        </button>
         <button
           onClick={() => remove(s.id)}
           className="text-slate-400 hover:text-red-400 transition-colors shrink-0"
@@ -1405,11 +1630,16 @@ function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, fl
         </div>
       )}
 
-      {/* 底栏：总量 + 每单位价 */}
-      <div className="flex items-center justify-between text-xs pt-2 border-t border-edge/50">
+      {/* 底栏：总量 + 每件价 + 每单位价 */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs pt-2 border-t border-edge/50">
         <span className="text-slate-400 tabular">
           {total > 0 ? `总量 ${fmt.num(total)}${s.unit}` : '总量 —'}
         </span>
+        {packPrice > 0 && (
+          <span className="text-slate-400 tabular">
+            每件 {fmt.price4(packPrice)}/{s.packUnit || '件'}
+          </span>
+        )}
         <span className={`font-semibold tabular ${up > 0 ? 'text-brand' : 'text-slate-400'}`}>
           {up > 0 ? `${fmt.price4(up)}/${s.unit}` : '待补充'}
         </span>
@@ -1420,10 +1650,11 @@ function SkuRowCard({ s, idx, update, updateParam, remove, dims, flavorLabel, fl
 
 /* ============ 空状态：首次进入的快速入门 ============ */
 
-function EmptyState({ genLoading, onGenExample, onPickImage, onAdd }: {
+function EmptyState({ genLoading, onGenExample, onPickImage, onQuickEntry, onAdd }: {
   genLoading: boolean
   onGenExample: () => void
   onPickImage: () => void
+  onQuickEntry: () => void
   onAdd: () => void
 }) {
   const cardCls =
@@ -1443,7 +1674,14 @@ function EmptyState({ genLoading, onGenExample, onPickImage, onAdd }: {
         <p className="mt-1.5 text-xs sm:text-sm text-slate-500">
           填写、截图或粘贴，30 秒搭好一个比价清单
         </p>
-        <div className="mt-8 grid sm:grid-cols-3 gap-3 text-left">
+        <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-left">
+          <button onClick={onQuickEntry} className={cardCls}>
+            <div className={`${iconCls} bg-amber-500/15`}>
+              <ClipboardList className="h-5 w-5 text-amber-500" />
+            </div>
+            <div className="text-sm font-semibold">极速录入</div>
+            <div className="text-xs text-slate-400 mt-0.5">一行一条规格 + 价格</div>
+          </button>
           <button onClick={onGenExample} disabled={genLoading} className={cardCls}>
             <div className={`${iconCls} bg-violet-500/15`}>
               {genLoading

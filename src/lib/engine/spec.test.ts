@@ -48,6 +48,18 @@ describe('parseSpec 规格描述 → 结构化字段', () => {
     expect(parseSpec('200g')).toMatchObject({ quantity: 200, unit: 'g' })
   })
 
+  // 回归守卫：电商整箱规格常写成 "12瓶*2箱"，必须连乘。
+  // 曾经只取最后一组，300ml*12瓶*2箱 被当成 12 瓶，7200ml 算成 3600ml，比价结论直接反了。
+  it('复合件数连乘，量词取最内层', () => {
+    expect(parseSpec('300ml*12瓶*2箱')).toEqual({
+      quantity: 300,
+      unit: 'ml',
+      packs: 24,
+      packUnit: '瓶',
+    })
+    expect(parseSpec('500ml*6瓶*4箱')).toMatchObject({ packs: 24, packUnit: '瓶' })
+  })
+
   it('空字符串返回空对象', () => {
     expect(parseSpec('')).toEqual({})
   })
@@ -61,6 +73,17 @@ describe('buildSpec 结构化字段 → 规格描述', () => {
 
   it('缺省 packUnit 回退为「袋」', () => {
     expect(buildSpec(38, 'g', 20)).toBe('38g×20袋')
+  })
+
+  // 回归守卫：液量单位下回退「瓶」而不是「袋」，否则饮料会被拼成 "500ml×24袋"
+  it('液量单位缺省 packUnit 回退为「瓶」', () => {
+    expect(buildSpec(500, 'ml', 24)).toBe('500ml×24瓶')
+    expect(buildSpec(888, 'ml', 12)).toBe('888ml×12瓶')
+    expect(buildSpec(1.5, 'L', 6)).toBe('1.5L×6瓶')
+  })
+
+  it('显式 packUnit 优先于单位推断', () => {
+    expect(buildSpec(500, 'ml', 24, '箱')).toBe('500ml×24箱')
   })
 
   it('packs<=0 兜底为 1', () => {
