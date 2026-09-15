@@ -11,7 +11,7 @@ import { useChartTheme, type ChartTheme } from '../lib/useChartTheme'
 import { exportNodeToPng, buildReportFileName, EXPORT_BG } from '../lib/exportImage'
 import {
   Bar, BarChart, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ComposedChart, Line, Cell, ReferenceLine, ReferenceDot,
+  ComposedChart, Line, Cell, ReferenceLine, ReferenceDot, Customized,
 } from 'recharts'
 
 interface Props {
@@ -235,6 +235,164 @@ interface SpecRow {
 /** 非冠军柱的中性色（亮 / 暗各一） */
 const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
 
+/* ============ 避坑对照的图形标注：四种画法（都做出来，比较后再做减法） ============ */
+
+/** 避坑标注样式：右缘括线 / 行高亮 / 差值段 / 同号徽标 */
+type WarnStyle = 'bracket' | 'band' | 'delta' | 'badge'
+
+/** 样式切换器候选（顺序 = 展示顺序）；caption 用于避坑提示标题后的说明 */
+const WARN_STYLE_OPTIONS: Array<{ k: WarnStyle; label: string; hint: string; caption: string }> = [
+  { k: 'bracket', label: '右缘括线', hint: '在图右侧用一个括线把被对照的两条横条框在一起，编号挂在括线中间。', caption: '图上右侧括线框住的正是被对照的两条规格' },
+  { k: 'band', label: '行高亮', hint: '把被对照的两条横条整行铺一层淡黄底，像表格里高亮那两行。', caption: '图上铺了淡黄底的两行正是被对照的规格' },
+  { k: 'delta', label: '差值段', hint: '在较贵那条上标出「比便宜那条多出来的这一截」，并标清贵了多少。', caption: '图上粗黄段标出了贵出来的那一截' },
+  { k: 'badge', label: '同号徽标', hint: '不画线，只在两条横条右侧的空白里各挂一个同号徽标，与下方文字对号入座。', caption: '图上的同号徽标对应下面每一条' },
+]
+
+/** 图例里的小标记：与当前避坑标注画法保持一致 */
+function WarnLegendMark({ warnStyle, color }: { warnStyle: WarnStyle; color: string }) {
+  if (warnStyle === 'band') {
+    return <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color, opacity: 0.35 }} />
+  }
+  if (warnStyle === 'delta') {
+    return <span className="inline-block w-4 h-1.5 rounded-full" style={{ background: color }} />
+  }
+  if (warnStyle === 'badge') {
+    return (
+      <span
+        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white"
+        style={{ background: color }}
+      >
+        1
+      </span>
+    )
+  }
+  return <span className="inline-block w-2 h-3.5 border-y-2 border-r-2 border-l-0 rounded-r-sm" style={{ borderColor: color }} />
+}
+
+/** Customized 覆盖层能拿到的 recharts 图表内部状态（只声明用得到的字段） */
+interface WarnOverlayProps {
+  warnStyle?: WarnStyle
+  warnRows?: SpecRow[]
+  warnKey?: keyof Pick<SpecRow, 'perUnit' | 'per100' | 'savings'>
+  warnPairs?: WarningPair[]
+  warnTheme?: ChartTheme
+  xAxisMap?: Record<string, { scale?: (v: number) => number }>
+  yAxisMap?: Record<string, { scale?: (v: string) => number; bandSize?: number }>
+  offset?: { top: number; left: number; width: number; height: number }
+}
+
+/**
+ * 避坑对照的图形标注（替代原先那条横穿整张图的长斜虚线）。
+ * 借 recharts 的 <Customized> 拿到图表内部坐标（xAxisMap / yAxisMap 的 scale + offset），
+ * 于是能精确落到每条横条的柱端，把"哪两条被对照"画得干净、不穿越其它柱子。
+ * 四种画法共用同一份坐标，靠 warnStyle 切换。
+ */
+function WarnOverlay({
+  warnStyle = 'bracket',
+  warnRows = [],
+  warnKey = 'perUnit',
+  warnPairs = [],
+  warnTheme,
+  xAxisMap,
+  yAxisMap,
+  offset,
+}: WarnOverlayProps) {
+  const xScale = xAxisMap ? Object.values(xAxisMap)[0]?.scale : undefined
+  const yAxis = yAxisMap ? Object.values(yAxisMap)[0] : undefined
+  const yScale = yAxis?.scale
+  const bandSize = yAxis?.bandSize ?? 36
+  if (!warnTheme || !offset || !xScale || !yScale || warnPairs.length === 0) return <g />
+
+  const amber = warnTheme.series.margin
+  const plotLeft = offset.left
+  const plotRight = offset.left + offset.width
+  const maxTip = warnRows.reduce((m, r) => Math.max(m, xScale(r[warnKey])), 0)
+  // 括线 / 编号一律放"所有柱子右侧"的空白里；柱子太靠右时退到右边距内
+  const spineX = Math.min(Math.max(maxTip + 44, plotRight - 6), plotRight + 56)
+
+  const badge = (cx: number, cy: number, text: string) => (
+    <g>
+      <circle cx={cx} cy={cy} r={9} fill={amber} stroke={warnTheme.label.stroke} strokeWidth={2} />
+      <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" fill="#ffffff" fontSize={11} fontWeight={700}>
+        {text}
+      </text>
+    </g>
+  )
+
+  return (
+    <g>
+      {warnPairs.map((p, i) => {
+        const a = warnRows.find((r) => r.id === p.fromId) // 被对照里较贵的那条
+        const b = warnRows.find((r) => r.id === p.toId) // 较便宜的那条
+        if (!a || !b) return null
+        const xA = xScale(a[warnKey])
+        const xB = xScale(b[warnKey])
+        const yA = yScale(a.name) + bandSize / 2
+        const yB = yScale(b.name) + bandSize / 2
+        const lo = Math.min(xA, xB)
+        const hi = Math.max(xA, xB)
+        const midY = (yA + yB) / 2
+        const no = String(i + 1)
+        // 多组对照各自占一条"竖向泳道"，编号也顺次右移，避免几组叠在同一竖线上看着像连成一条
+        const laneX = spineX + i * 22
+        const badgeX = laneX + 14
+
+        if (warnStyle === 'badge') {
+          return (
+            <g key={`warn-${i}`}>
+              {badge(badgeX, yA, no)}
+              {badge(badgeX, yB, no)}
+            </g>
+          )
+        }
+
+        if (warnStyle === 'band') {
+          return (
+            <g key={`warn-${i}`}>
+              <rect x={plotLeft} y={yScale(a.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+              <rect x={plotLeft} y={yScale(b.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+              {badge(badgeX, midY, no)}
+            </g>
+          )
+        }
+
+        if (warnStyle === 'delta') {
+          return (
+            <g key={`warn-${i}`}>
+              {/* 便宜那条的柱端拉一条竖直虚线过去，充当"基准线" */}
+              <line x1={xB} y1={yB} x2={xB} y2={yA} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+              {/* 贵那条上"多出来的一截" */}
+              <line x1={lo} y1={yA} x2={hi} y2={yA} stroke={amber} strokeWidth={6} strokeLinecap="round" />
+              <circle cx={hi} cy={yA} r={4} fill={amber} />
+              <text x={(lo + hi) / 2} y={yA - 13} textAnchor="middle" fill={amber} fontSize={11} fontWeight={700}>
+                {`贵 ${p.pct}%`}
+              </text>
+              {badge(badgeX, yA, no)}
+            </g>
+          )
+        }
+
+        // bracket（默认）：右缘一个把两条横条"收"在一起的括线
+        return (
+          <g key={`warn-${i}`}>
+            <path
+              d={`M ${laneX - 11} ${yA} H ${laneX} V ${yB} H ${laneX - 11}`}
+              fill="none"
+              stroke={amber}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <circle cx={xA} cy={yA} r={3.5} fill={amber} />
+            <circle cx={xB} cy={yB} r={3.5} fill={amber} />
+            {badge(badgeX, midY, no)}
+          </g>
+        )
+      })}
+    </g>
+  )
+}
+
 /**
  * 性价比主视觉：同一份数据四种编码方式，都只围绕「每单位单价」。
  * - price    每单位单价横条（越短越省 + 平均线）
@@ -244,15 +402,17 @@ const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
  * 冠军条统一高亮，其余中性色。
  */
 function MainVisual({
-  kind, rows, unitLabel, anchorId, theme, warningPairs,
+  kind, rows, unitLabel, anchorId, theme, warningPairs, warnStyle,
 }: {
   kind: VisualKind
   rows: SpecRow[]
   unitLabel: string
   anchorId: string
   theme: ChartTheme
-  /** 需要连线对照的避坑提示（带两条规格 id），在主视觉里用虚线把两条横条连起来 */
+  /** 需要连线对照的避坑提示（带两条规格 id），在主视觉里标出被对照的两条横条 */
   warningPairs: WarningPair[]
+  /** 避坑对照的图形标注样式（右缘括线 / 行高亮 / 差值段 / 同号徽标） */
+  warnStyle: WarnStyle
 }) {
   const tooltipProps = {
     contentStyle: theme.tooltipStyle,
@@ -334,19 +494,10 @@ function MainVisual({
   const avg = data.reduce((s, r) => s + r[dataKey], 0) / Math.max(1, data.length)
   const chartHeight = Math.max(220, data.length * 40 + 60)
 
-  // 避坑连线：把被对照的两条规格横条用虚线连起来（从柱顶到柱顶），
-  // 中点挂一个编号徽标，和下方「避坑提示」里同号的那条说明一一对应。
-  // id 由引擎按"与图表相同口径"的合并规格集合生成，这里只做映射，对不上就不画。
-  const connectors = warningPairs.flatMap((p, i) => {
-    const from = data.find((r) => r.id === p.fromId)
-    const to = data.find((r) => r.id === p.toId)
-    return from && to ? [{ index: i, from, to }] : []
-  })
-
   return (
     <div style={{ height: chartHeight }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart layout="vertical" data={data} margin={{ top: 8, right: 72, bottom: 24, left: 4 }} barCategoryGap={12}>
+        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warningPairs.length ? 100 + (warningPairs.length - 1) * 26 : 72, bottom: 24, left: 4 }} barCategoryGap={12}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
           <XAxis
             type="number"
@@ -365,42 +516,15 @@ function MainVisual({
           {kind === 'price' && (
             <ReferenceLine x={avg} stroke={theme.tick} strokeDasharray="4 4" label={{ value: '平均', position: 'top', fill: theme.tick, fontSize: 10 }} />
           )}
-          {/* 避坑对照：虚线连两条横条 + 线上编号徽标 */}
-          {connectors.map(({ index, from, to }) => (
-            <ReferenceLine
-              key={`warn-${index}`}
-              isFront
-              segment={[
-                { x: from[dataKey], y: from.name },
-                { x: to[dataKey], y: to.name },
-              ]}
-              stroke={theme.series.margin}
-              strokeWidth={1.6}
-              strokeDasharray="5 4"
-              label={(props: { viewBox?: { x: number; y: number; width: number; height: number } }) => {
-                const vb = props.viewBox
-                if (!vb) return <g />
-                const cx = vb.x + vb.width / 2
-                const cy = vb.y + vb.height / 2
-                return (
-                  <g>
-                    <circle cx={cx} cy={cy} r={9} fill={theme.series.margin} stroke={theme.label.stroke} strokeWidth={2} />
-                    <text
-                      x={cx}
-                      y={cy}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fill="#ffffff"
-                      fontSize={11}
-                      fontWeight={700}
-                    >
-                      {index + 1}
-                    </text>
-                  </g>
-                )
-              }}
-            />
-          ))}
+          {/* 避坑对照：把被对照的两条横条标出来（四种画法，靠 warnStyle 切换） */}
+          <Customized
+            component={WarnOverlay}
+            warnStyle={warnStyle}
+            warnRows={data}
+            warnKey={dataKey}
+            warnPairs={warningPairs}
+            warnTheme={theme}
+          />
           <Bar dataKey={dataKey} name={seriesName} radius={[0, 6, 6, 0]} maxBarSize={24}
             label={(props: { x?: number; y?: number; width?: number; height?: number; value?: number }) => {
               const { x, y, width, height, value } = props
@@ -626,6 +750,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
   // 主视觉类型：四种候选编码方式，默认「每单位单价」最直接
   const [visual, setVisual] = useState<VisualKind>('price')
+  // 避坑对照的图形标注样式：四种候选画法，默认右缘括线
+  const [warnStyle, setWarnStyle] = useState<WarnStyle>('bracket')
   // 逐档明细表默认收起：升档卡片已把结论说完，明细按需展开
   const [showMarginTable, setShowMarginTable] = useState(false)
   // 完整排名表默认收起：报告先给结论，明细按需展开
@@ -766,6 +892,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     { k: 'savings', label: '省下多少钱', hint: '相比全场最贵单价、按本档总量折算，选这一档实际省下的金额（元）。' },
   ]
   const activeVisual = VISUAL_OPTIONS.find((o) => o.k === visual) ?? VISUAL_OPTIONS[0]
+  const activeWarnStyle = WARN_STYLE_OPTIONS.find((o) => o.k === warnStyle) ?? WARN_STYLE_OPTIONS[0]
 
   return (
     <div ref={reportRef} className="space-y-8">
@@ -1075,6 +1202,29 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
           <p className="text-xs text-slate-500 mb-4">{activeVisual.hint}</p>
 
+          {/* 避坑标注样式切换：四种画法都做出来，比较后再做减法 */}
+          {visual !== 'quadrant' && warningPairs.length > 0 && (
+            <div className="mb-4 rounded-xl border border-edge bg-brand-soft/20 p-3">
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-slate-500">避坑标注：</span>
+                {WARN_STYLE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.k}
+                    onClick={() => setWarnStyle(opt.k)}
+                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                      warnStyle === opt.k
+                        ? 'bg-amber-400/20 text-amber-600 dark:text-amber-400 border border-amber-400/50'
+                        : 'text-slate-400 hover:text-amber-600 border border-edge'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-slate-500">{activeWarnStyle.hint}</p>
+            </div>
+          )}
+
           <div className="rounded-xl border border-edge bg-brand-soft/20 p-4">
             <MainVisual
               kind={visual}
@@ -1083,6 +1233,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               anchorId={visualAnchorId}
               theme={chartTheme}
               warningPairs={warningPairs}
+              warnStyle={warnStyle}
             />
           </div>
 
@@ -1103,22 +1254,20 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             )}
             {visual !== 'quadrant' && warningPairs.length > 0 && (
               <span className="inline-flex items-center gap-1">
-                <span className="inline-block w-5 border-t-2 border-dashed" style={{ borderColor: chartTheme.series.margin }} />
+                <WarnLegendMark warnStyle={warnStyle} color={chartTheme.series.margin} />
                 避坑对照（编号见下）
               </span>
             )}
             <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
           </div>
 
-          {/* 避坑提示：并入主视觉，图上虚线 + 编号直接指向被对照的两条横条 */}
+          {/* 避坑提示：并入主视觉，图上的标注 + 编号直接指向被对照的两条横条 */}
           {(warningPairs.length > 0 || warningNotes.length > 0) && (
             <div className="mt-4 rounded-xl border border-amber-400/30 bg-amber-400/5 p-4">
               <h4 className="text-xs font-bold tracking-tight mb-3 flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
                 <AlertTriangle className="h-3.5 w-3.5" /> 避坑提示
                 {visual !== 'quadrant' && warningPairs.length > 0 && (
-                  <span className="font-normal text-amber-600/70 dark:text-amber-400/70">
-                    · 图上虚线标出了被对照的两条规格
-                  </span>
+                  <span className="font-normal text-amber-600/70 dark:text-amber-400/70">· {activeWarnStyle.caption}</span>
                 )}
               </h4>
               <ul className="space-y-2">
