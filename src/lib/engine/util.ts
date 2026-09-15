@@ -14,6 +14,35 @@ export const STALE_DAYS = 30
 export const isStale = (ts: number | undefined, now = Date.now()): boolean =>
   typeof ts === 'number' && Number.isFinite(ts) && ts > 0 && now - ts > STALE_DAYS * 86_400_000
 
+/**
+ * 报告区的「展示单位」换算。
+ *
+ * 容量类商品的基准单位是 ml（归一化后用于跨规格比价），但"每 ml ¥0.0032"这种数字
+ * 读不出量级、还挤在小数点后，用户无法凭直觉比较。报告与结论文案里统一换成
+ * "每 L ¥3.23"，录入表仍保留 ml（比价需要统一基准），只有展示层做这层换算。
+ *
+ * factor = 1 个展示单位等于多少个基准单位（L = 1000 ml）。
+ */
+const DISPLAY_UNIT_MAP: Record<string, { unit: string; factor: number }> = {
+  ml: { unit: 'L', factor: 1000 },
+}
+
+/** 展示单位名（ml → L），非容量单位原样返回 */
+export const displayUnit = (unit: string): string =>
+  DISPLAY_UNIT_MAP[unit]?.unit ?? unit
+
+/** 把基准单位的总量换算成展示单位总量（ml → L 需 ÷1000） */
+export const displayQuantity = (quantity: number, unit: string): number => {
+  const factor = DISPLAY_UNIT_MAP[unit]?.factor
+  return factor ? round(quantity / factor, 4) : quantity
+}
+
+/** 把「每基准单位价格」换算成「每展示单位价格」（每 ml 价 ×1000 = 每 L 价） */
+export const displayUnitPrice = (unitPrice: number, unit: string): number => {
+  const factor = DISPLAY_UNIT_MAP[unit]?.factor
+  return factor ? round(unitPrice * factor, 4) : unitPrice
+}
+
 /** 数字格式化 */
 export const fmt = {
   yuan: (n: number) => `¥${n.toFixed(2)}`,

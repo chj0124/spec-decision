@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster } from '../lib/types'
-import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay } from '../lib/engine'
+import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
@@ -11,7 +11,7 @@ import { useChartTheme } from '../lib/useChartTheme'
 import { exportNodeToPng, buildReportFileName, EXPORT_BG } from '../lib/exportImage'
 import {
   Bar, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  ComposedChart, Line,
+  ComposedChart, Line, ScatterChart, Scatter, ZAxis,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend,
 } from 'recharts'
 
@@ -73,6 +73,18 @@ function shortLabel(it: ComputedSku): string {
   return it.name.length > 16 ? it.name.slice(0, 16) + '…' : it.name
 }
 
+/**
+ * 每件量词：优先用商品实际的件数量词（瓶/罐/袋/盒…），
+ * 没有再按"是否多件"回退——多件用「包」、单件用「件」。
+ * 这样瓶装饮料会显示"每瓶价格"而不是硬编码的"每包价格"。
+ */
+const packWord = (packs: number, packUnit?: string): string =>
+  packUnit || (packs > 1 ? '包' : '件')
+
+/** 列表级每件量词：取列表里实际出现过的量词，没有则回退 */
+const listPackWord = (items: ComputedSku[]): string =>
+  items.find((i) => i.packUnit)?.packUnit || (items.some((i) => i.packs > 1) ? '包' : '件')
+
 /** 写剪贴板：优先 Clipboard API，非安全上下文/旧浏览器回退 execCommand */
 async function writeClipboard(text: string): Promise<void> {
   try {
@@ -102,8 +114,8 @@ function buildSummaryText(result: DecisionResult, config: DecisionConfig): strin
   lines.push('')
   lines.push(`★ 最划算：${best.name}`)
   lines.push(
-    `  总价 ${fmt.yuan(best.price)} · 总量 ${fmt.num(best.totalQuantity)}${best.unit}` +
-    ` · 每${best.unit} ${fmt.priceUnit(best.unitPrice)} · 综合得分 ${best.score.toFixed(1)}`,
+    `  总价 ${fmt.yuan(best.price)} · 总量 ${fmt.num(displayQuantity(best.totalQuantity, best.unit))}${displayUnit(best.unit)}` +
+    ` · 每${displayUnit(best.unit)} ${fmt.priceUnit(displayUnitPrice(best.unitPrice, best.unit))} · 综合得分 ${best.score.toFixed(1)}`,
   )
   // 摘要会被粘贴到别处流转，脱离页面后就看不出数据有多旧了，所以把新鲜度写进正文
   const priceAt = best.priceHistory?.[best.priceHistory.length - 1]?.t
@@ -121,7 +133,7 @@ function buildSummaryText(result: DecisionResult, config: DecisionConfig): strin
   lines.push('')
   lines.push(`完整排名（前 5 / 共 ${items.length} 项）：`)
   items.slice(0, 5).forEach((it) => {
-    lines.push(`  ${it.rank}. ${it.name} — 每${it.unit} ${fmt.priceUnit(it.unitPrice)}（总价 ${fmt.yuan(it.price)}）`)
+    lines.push(`  ${it.rank}. ${it.name} — 每${displayUnit(it.unit)} ${fmt.priceUnit(displayUnitPrice(it.unitPrice, it.unit))}（总价 ${fmt.yuan(it.price)}）`)
   })
   if (margins.length > 0) {
     lines.push('')
@@ -261,6 +273,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
   // 全量视图分组折叠：与工作台一致的工具栏 + 可点击分组标题行
   const [groupBy, setGroupBy] = useState<FullGroupBy | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // 单价对比图类型：阶梯折线（看拐点）/ 同轴分组柱（看差距）/ 气泡散点（看规模效率）
+  const [chartKind, setChartKind] = useState<'step' | 'grouped' | 'bubble'>('step')
   const toggleGroup = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev)
@@ -508,13 +522,13 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <h2 className="text-3xl sm:text-5xl font-bold tracking-tight">{best.name}</h2>
                 <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
                   <div>
-                    <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
+                    <div className="text-sm text-slate-400 mb-0.5">每{displayUnit(best.unit)}单价</div>
                     <div className="text-2xl font-bold text-brand tabular">
-                      <CountUp value={best.unitPrice} format={fmt.priceUnit} />
+                      <CountUp value={displayUnitPrice(best.unitPrice, best.unit)} format={fmt.priceUnit} />
                     </div>
                   </div>
                   <div>
-                    <div className="text-sm text-slate-400 mb-0.5">{best.packs > 1 ? '每包' : '每件'}价格</div>
+                    <div className="text-sm text-slate-400 mb-0.5">每{packWord(best.packs, best.packUnit)}价格</div>
                     <div className="text-2xl font-bold tabular">
                       <CountUp value={best.packPrice} format={fmt.yuan} />
                     </div>
@@ -530,7 +544,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     <div className="text-2xl font-bold tabular">
                       <CountUp value={best.price} format={fmt.yuan} />
                       <span className="text-sm text-slate-400 font-normal ml-2">
-                        {fmt.num(best.totalQuantity)}{best.unit}
+                        {fmt.num(displayQuantity(best.totalQuantity, best.unit))}{displayUnit(best.unit)}
                       </span>
                     </div>
                   </div>
@@ -688,8 +702,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       <th className="px-2 py-2 font-medium">规格</th>
                       <th className="px-2 py-2 font-medium text-right">总价</th>
                       <th className="px-2 py-2 font-medium text-right">总量</th>
-                      <th className="px-2 py-2 font-medium text-right">每{items[0]?.unit ?? ''}</th>
-                      <th className="px-2 py-2 font-medium text-right">{items.some((i) => i.packs > 1) ? '每包' : '每件'}</th>
+                      <th className="px-2 py-2 font-medium text-right">每{displayUnit(items[0]?.unit ?? '')}</th>
+                      <th className="px-2 py-2 font-medium text-right">每{listPackWord(items)}</th>
                     </tr>
                   </thead>
                   {/* key 随 groupBy 变化，切换分组维度时整体重挂载 */}
@@ -726,17 +740,55 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
             <TrendingDown className="h-5 w-5 text-brand" /> 单价对比 & 边际效益
           </h3>
+          {/* 图表类型切换：同一份数据三种看法——阶梯看拐点、分组看差距、气泡看规模效率 */}
+          <div className="flex items-center gap-2 flex-wrap mb-3 text-xs">
+            <span className="text-slate-500">图表类型：</span>
+            {([
+              { k: 'step' as const, label: '单价阶梯' },
+              { k: 'grouped' as const, label: '同轴分组柱' },
+              { k: 'bubble' as const, label: '气泡散点' },
+            ]).map(({ k, label }) => (
+              <button
+                key={k}
+                onClick={() => setChartKind(k)}
+                className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                  chartKind === k
+                    ? 'bg-brand/15 text-brand border border-brand/50'
+                    : 'text-slate-400 hover:text-brand-deep border border-edge'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <p className="text-xs text-slate-500 mb-5">
-            双轴合一图：靛柱=单价，橙柱=升档的边际成本（每多买 1 基准单位花多少），绿线=相对上一档单价降幅% ·
-            按总量升序即升档顺序，绿线断崖处即性价比拐点
+            {chartKind === 'step'
+              ? '阶梯折线：单价随规格升档逐级下探，绿色虚线为相对上一档的单价降幅%（右轴），断崖处即性价比拐点'
+              : chartKind === 'grouped'
+                ? '同轴分组柱：在同一价格坐标下对比「单价」与「升档边际成本」，两柱越接近说明这一档加量越值'
+                : '气泡散点：横轴=总量（越右越大份）、纵轴=单价（越低越省）、气泡=总价（越大气泡越大），右下角小球最划算'}
           </p>
 
-          {/* 双轴合一图：单价柱（青）+ 边际成本柱（橙）+ 降幅折线（绿，右轴%） */}
+          {/* 单价对比图：单价与边际成本统一按展示单位换算（ml→L），避免一长串小数看不清量级 */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（靛）
-              <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本（橙）
-              <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
+              {chartKind === 'step' && (
+                <>
+                  <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（阶梯）
+                  <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
+                </>
+              )}
+              {chartKind === 'grouped' && (
+                <>
+                  <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价
+                  <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本
+                </>
+              )}
+              {chartKind === 'bubble' && (
+                <>
+                  <span className="inline-block w-3 h-3 rounded-full bg-brand" /> 一个气泡 = 一个规格（越大总价越高）
+                </>
+              )}
               <span className="text-slate-400 dark:text-slate-500">· 按总量升序=升档顺序</span>
             </div>
             <div className="h-80">
@@ -754,16 +806,67 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         : m.name.length > 8
                           ? m.name.slice(0, 8) + '…'
                           : m.name
+                    // 单价 / 边际成本都从「每基准单位」换算成「每展示单位」（ml→L）。
+                    // 不做换算的话纵轴全是 0.003 这类小数点后的数字，读不出量级。
+                    const perUnit = displayUnitPrice(m.unitPrice, m.unit)
+                    const marginPerUnit =
+                      margin && margin.extraQuantity > 0
+                        ? displayUnitPrice(round6(margin.extraCost / margin.extraQuantity), m.unit)
+                        : null
                     return {
                       name: label,
-                      单价: round6(m.unitPrice),
-                      边际成本:
-                        margin && margin.extraQuantity > 0
-                          ? round6(margin.extraCost / margin.extraQuantity)
-                          : null,
+                      fullName: m.name,
+                      单价: round6(perUnit),
+                      边际成本: marginPerUnit == null ? null : round6(marginPerUnit),
                       降幅: margin ? margin.unitPriceDropPct : null,
+                      总量: displayQuantity(m.totalQuantity, m.unit),
+                      总价: m.price,
                     }
                   })
+                  const tooltipLabel = (value: unknown, payload?: Array<{ payload?: { fullName?: string } }>) =>
+                    payload?.[0]?.payload?.fullName ?? String(value)
+
+                  // 气泡散点：横轴=总量、纵轴=单价、气泡大小=总价，看「规模-单价」的整体分布
+                  if (chartKind === 'bubble') {
+                    return (
+                      <ScatterChart data={chartData} margin={{ top: 28, right: 28, bottom: 44, left: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
+                        <XAxis
+                          type="number"
+                          dataKey="总量"
+                          name="总量"
+                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                          tickFormatter={(v) => fmt.num(v)}
+                          label={{ value: '总量（越大份 →）', position: 'insideBottom', offset: -28, fill: chartTheme.tick, fontSize: 11 }}
+                        />
+                        <YAxis
+                          type="number"
+                          dataKey="单价"
+                          name="单价"
+                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                          tickFormatter={(v) => `¥${v}`}
+                          width={60}
+                          label={{ value: '单价', angle: -90, position: 'insideLeft', fill: chartTheme.tick, fontSize: 11 }}
+                        />
+                        <ZAxis type="number" dataKey="总价" range={[80, 520]} name="总价" />
+                        <Tooltip
+                          cursor={{ strokeDasharray: '3 3' }}
+                          contentStyle={chartTheme.tooltipStyle}
+                          labelStyle={chartTheme.tooltipLabelStyle}
+                          itemStyle={chartTheme.tooltipItemStyle}
+                          labelFormatter={tooltipLabel}
+                          formatter={(value, name) => {
+                            const num = typeof value === 'number' ? value : Number(value)
+                            if (name === '单价') return [fmt.priceUnit(num), name]
+                            if (name === '总价') return [fmt.yuan(num), name]
+                            return [fmt.num(num), name]
+                          }}
+                        />
+                        <Scatter name="规格" data={chartData} fill={chartTheme.series.unitPrice} fillOpacity={0.55} />
+                      </ScatterChart>
+                    )
+                  }
+
                   return (
                     <ComposedChart data={chartData} margin={{ top: 36, right: 52, bottom: 8, left: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} vertical={false} />
@@ -781,93 +884,124 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         tickFormatter={(v) => `¥${v}`}
                         width={56}
                       />
-                      <YAxis
-                        yAxisId="pct"
-                        orientation="right"
-                        tick={{ fill: chartTheme.tick, fontSize: 11 }}
-                        tickFormatter={(v) => `${v}%`}
-                        width={44}
-                        domain={[0, 'dataMax']}
-                      />
+                      {/* 只有阶梯图用右轴（降幅%）；分组柱两系列同轴，不需要第二根轴 */}
+                      {chartKind === 'step' && (
+                        <YAxis
+                          yAxisId="pct"
+                          orientation="right"
+                          tick={{ fill: chartTheme.tick, fontSize: 11 }}
+                          tickFormatter={(v) => `${v}%`}
+                          width={44}
+                          domain={[0, 'dataMax']}
+                        />
+                      )}
                       <Tooltip
                         cursor={{ fill: chartTheme.cursorFill }}
                         contentStyle={chartTheme.tooltipStyle}
                         labelStyle={chartTheme.tooltipLabelStyle}
                         itemStyle={chartTheme.tooltipItemStyle}
+                        labelFormatter={tooltipLabel}
                         formatter={(value, name) => {
                           const num = typeof value === 'number' ? value : Number(value)
                           if (name === '降幅') return [`${num}%`, name]
-                          return [`¥${num}`, name]
+                          return [fmt.priceUnit(num), name]
                         }}
                       />
-                      <Bar
-                        yAxisId="price"
-                        dataKey="单价"
-                        fill={chartTheme.series.unitPrice}
-                        radius={[6, 6, 0, 0]}
-                        maxBarSize={40}
-                        label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
-                          const { x, y, width, value } = props
-                          if (x == null || y == null || width == null || value == null) return <g />
-                          return (
-                            <text
-                              x={x + width / 2}
-                              y={y - 8}
-                              fill={chartTheme.label.fill}
-                              stroke={chartTheme.label.stroke}
-                              strokeWidth={3}
-                              paintOrder="stroke"
-                              fontSize={11}
-                              fontWeight={700}
-                              textAnchor="middle"
-                            >
-                              {fmt.priceUnit(value)}
-                            </text>
-                          )
-                        }}
-                      />
-                      <Bar
-                        yAxisId="price"
-                        dataKey="边际成本"
-                        fill={chartTheme.series.margin}
-                        radius={[6, 6, 0, 0]}
-                        maxBarSize={40}
-                        label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
-                          const { x, y, width, value } = props
-                          if (x == null || y == null || width == null || value == null) return <g />
-                          return (
-                            <text
-                              x={x + width / 2}
-                              y={y - 8}
-                              fill={chartTheme.label.fill}
-                              stroke={chartTheme.label.stroke}
-                              strokeWidth={3}
-                              paintOrder="stroke"
-                              fontSize={11}
-                              fontWeight={700}
-                              textAnchor="middle"
-                            >
-                              {fmt.priceUnit(value)}
-                            </text>
-                          )
-                        }}
-                      />
-                      <Line
-                        yAxisId="pct"
-                        dataKey="降幅"
-                        stroke={chartTheme.series.drop}
-                        strokeWidth={2.4}
-                        dot={{ r: 4, fill: chartTheme.series.drop }}
-                        label={(props: { x?: number; y?: number; value?: number }) => {
-                          const { x, y, value } = props
-                          if (x == null || y == null || value == null) return <g />
-                          return (
-                            <text x={x} y={y - 10} fill={chartTheme.series.drop} fontSize={10} fontWeight={700} textAnchor="middle">
-                              {value}%
-                            </text>
-                          )
-                        }}
-                      />
+                      {chartKind === 'step' ? (
+                        <>
+                          <Line
+                            yAxisId="price"
+                            dataKey="单价"
+                            type="stepAfter"
+                            stroke={chartTheme.series.unitPrice}
+                            strokeWidth={2.6}
+                            dot={{ r: 4, fill: chartTheme.series.unitPrice }}
+                            label={(props: { x?: number; y?: number; value?: number }) => {
+                              const { x, y, value } = props
+                              if (x == null || y == null || value == null) return <g />
+                              return (
+                                <text
+                                  x={x}
+                                  y={y - 10}
+                                  fill={chartTheme.label.fill}
+                                  stroke={chartTheme.label.stroke}
+                                  strokeWidth={3}
+                                  paintOrder="stroke"
+                                  fontSize={11}
+                                  fontWeight={700}
+                                  textAnchor="middle"
+                                >
+                                  {fmt.priceUnit(value)}
+                                </text>
+                              )
+                            }}
+                          />
+                          <Line
+                            yAxisId="pct"
+                            dataKey="降幅"
+                            stroke={chartTheme.series.drop}
+                            strokeWidth={2}
+                            strokeDasharray="4 4"
+                            connectNulls
+                            dot={{ r: 3, fill: chartTheme.series.drop }}
+                          />
+                        </>
+                      ) : (
+                        <>
+                          <Bar
+                            yAxisId="price"
+                            dataKey="单价"
+                            fill={chartTheme.series.unitPrice}
+                            radius={[6, 6, 0, 0]}
+                            maxBarSize={40}
+                            label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
+                              const { x, y, width, value } = props
+                              if (x == null || y == null || width == null || value == null) return <g />
+                              return (
+                                <text
+                                  x={x + width / 2}
+                                  y={y - 8}
+                                  fill={chartTheme.label.fill}
+                                  stroke={chartTheme.label.stroke}
+                                  strokeWidth={3}
+                                  paintOrder="stroke"
+                                  fontSize={11}
+                                  fontWeight={700}
+                                  textAnchor="middle"
+                                >
+                                  {fmt.priceUnit(value)}
+                                </text>
+                              )
+                            }}
+                          />
+                          <Bar
+                            yAxisId="price"
+                            dataKey="边际成本"
+                            fill={chartTheme.series.margin}
+                            radius={[6, 6, 0, 0]}
+                            maxBarSize={40}
+                            label={(props: { x?: number; y?: number; width?: number; value?: number }) => {
+                              const { x, y, width, value } = props
+                              if (x == null || y == null || width == null || value == null) return <g />
+                              return (
+                                <text
+                                  x={x + width / 2}
+                                  y={y - 8}
+                                  fill={chartTheme.label.fill}
+                                  stroke={chartTheme.label.stroke}
+                                  strokeWidth={3}
+                                  paintOrder="stroke"
+                                  fontSize={11}
+                                  fontWeight={700}
+                                  textAnchor="middle"
+                                >
+                                  {fmt.priceUnit(value)}
+                                </text>
+                              )
+                            }}
+                          />
+                        </>
+                      )}
                     </ComposedChart>
                   )
                 })()}
@@ -916,12 +1050,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         <div className="text-sm text-slate-500 mt-0.5">{m.verdict}</div>
                       </td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
-                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</td>
+                      <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(displayQuantity(m.extraQuantity, m.unit))}{displayUnit(m.unit)}</td>
                       <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-brand' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
                         {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
                       </td>
                       <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">
-                        {perExtraYuan > 0 ? `${fmt.num(perExtraYuan)}${m.unit}` : '—'}
+                        {perExtraYuan > 0 ? `${fmt.num(displayQuantity(perExtraYuan, m.unit))}${displayUnit(m.unit)}` : '—'}
                       </td>
                     </tr>
                   )
@@ -1045,15 +1179,15 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
             {cluster.priceSpread > 0
               ? `${fmt.yuan(cluster.minPrice)} ~ ${fmt.yuan(cluster.maxPrice)}`
               : `${fmt.yuan(active.price)}`}{' '}
-            · 共 {fmt.num(cluster.quantity * cluster.packs)}{cluster.unit}
+            · 共 {fmt.num(displayQuantity(cluster.quantity * cluster.packs, cluster.unit))}{displayUnit(cluster.unit)}
           </div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-base font-bold tabular">
-            <span className="text-brand">{fmt.priceUnit(cluster.repUnitPrice)}</span>
-            <span className="text-sm text-slate-500 font-normal"> /{cluster.unit}</span>
+            <span className="text-brand">{fmt.priceUnit(displayUnitPrice(cluster.repUnitPrice, cluster.unit))}</span>
+            <span className="text-sm text-slate-500 font-normal"> /{displayUnit(cluster.unit)}</span>
           </div>
-          <div className="text-sm text-slate-500">{cluster.packs > 1 ? '每包' : '每件'} {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
+          <div className="text-sm text-slate-500">每{packWord(cluster.packs, cluster.packUnit)} {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
         </div>
       </div>
 
@@ -1093,7 +1227,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
               className="text-sm text-slate-400 mt-2"
             >
               已选 <span className="text-brand-deep font-medium">{active.name}</span>：
-              {fmt.yuan(active.price)}，每{active.unit} {fmt.priceUnit(active.unitPrice)}
+              {fmt.yuan(active.price)}，每{displayUnit(active.unit)} {fmt.priceUnit(displayUnitPrice(active.unitPrice, active.unit))}
             </motion.p>
           </AnimatePresence>
         </div>
@@ -1185,8 +1319,8 @@ function RankGroupRows({
                 </div>
               </td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(item.price)}</td>
-              <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
-              <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(item.unitPrice)}</td>
+              <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(displayQuantity(item.totalQuantity, item.unit))}{displayUnit(item.unit)}</td>
+              <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(displayUnitPrice(item.unitPrice, item.unit))}</td>
               <td className="px-2 py-2.5 text-right tabular text-slate-500 dark:text-slate-300">{fmt.yuan(item.packPrice)}</td>
             </motion.tr>
           )

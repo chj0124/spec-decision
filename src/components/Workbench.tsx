@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku, DecisionConfig, ParamDim, ParamType, ParamValue, PricePoint } from '../lib/types'
 import { uid, fmt, isStale, parseFlavor, groupSkus, parseSpec, buildSpec, inferFlavorLabel, UNIT_GROUPS, recordPrice, priceTrend, fmtPointDay } from '../lib/engine'
 import type { GroupBy } from '../lib/engine'
@@ -33,9 +33,29 @@ function AutoWidthInput({
 }: React.InputHTMLAttributes<HTMLInputElement> & { minWidth?: number; extra?: number }) {
   const spanRef = useRef<HTMLSpanElement>(null)
   const [w, setW] = useState(minWidth)
+  const measure = useCallback(() => {
+    const el = spanRef.current
+    if (!el) return
+    // 用 getBoundingClientRect 取小数宽度再向上取整：offsetWidth 会向下取整，
+    // 对 "ml" 这种刚好卡在边界上的短文本会把宽度算少 1~2px，导致末位被裁掉。
+    const raw = el.getBoundingClientRect().width
+    setW(Math.max(minWidth, Math.ceil(raw) + extra))
+  }, [minWidth, extra])
   useEffect(() => {
-    if (spanRef.current) setW(Math.max(minWidth, spanRef.current.offsetWidth + extra))
-  }, [value, props.placeholder, minWidth, extra, className])
+    measure()
+  }, [measure, value, props.placeholder, className])
+  // 字体（web font）加载完成前测量会偏小；加载后重测一次，避免首屏宽度不足被截断。
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined
+    if (!fonts?.ready) return
+    let alive = true
+    fonts.ready.then(() => {
+      if (alive) measure()
+    })
+    return () => {
+      alive = false
+    }
+  }, [measure, value, props.placeholder, className])
   return (
     <>
       {/* 测量用隐藏 span：复制 input 的 className（含字体/padding）保证测量准确。
@@ -1454,7 +1474,7 @@ function RowFields({ s, idx, update, updateParam, remove, duplicate, indented, d
           onChange={(e) => handleField('unit', e.target.value)}
           placeholder="g"
           list="unit-options"
-          minWidth={48}
+          minWidth={56} extra={24}
           className="field py-1.5 text-xs"
         />
       </td>

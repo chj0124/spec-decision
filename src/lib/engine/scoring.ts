@@ -7,7 +7,7 @@ import type {
   ParamValue,
   Sku,
 } from '../types'
-import { round, fmt } from './util'
+import { round, fmt, displayUnit, displayQuantity, displayUnitPrice } from './util'
 import { normalizeUnit } from './units'
 import { parseFlavor } from './spec'
 
@@ -210,12 +210,15 @@ export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
     // 例："比「16g×4袋」贵 ¥3.56，多 160g，每 g 省 2.23 分，划算。"
     // 用过滤+join 避免某段为空时出现连续逗号
     const costStr = `比「${baseShort}」贵 ${fmt.yuan(extraCost)}`
-    const qtyStr = extraQuantity > 0 ? `多 ${extraQuantity}${item.unit}` : ''
+    const qtyStr = extraQuantity > 0
+      ? `多 ${fmt.num(displayQuantity(extraQuantity, item.unit))}${displayUnit(item.unit)}`
+      : ''
+    const showUnit = displayUnit(item.unit)
     const marginStr = marginalSaving > 0
-      ? `每${item.unit}省 ${fmt.priceUnit(marginalSaving)}`
+      ? `每${showUnit}省 ${fmt.priceUnit(displayUnitPrice(marginalSaving, item.unit))}`
       : marginalSaving < 0
-        ? `每${item.unit}反贵 ${fmt.priceUnit(Math.abs(marginalSaving))}`
-        : `每${item.unit}持平`
+        ? `每${showUnit}反贵 ${fmt.priceUnit(displayUnitPrice(Math.abs(marginalSaving), item.unit))}`
+        : `每${showUnit}持平`
     const tail = grade === 'great' ? '超值'
       : grade === 'good' ? '划算'
       : grade === 'fair' ? '看需求选'
@@ -300,7 +303,8 @@ export function buildReasons(best: ComputedSku, items: ComputedSku[]): string[] 
     `综合得分 ${best.score.toFixed(1)} 分，在 ${items.length} 个规格中排名第一。`,
   )
   reasons.push(
-    `每${best.unit}仅 ${fmt.priceUnit(best.unitPrice)}（总量 ${best.totalQuantity}${best.unit}），单位成本最低。`,
+    `每${displayUnit(best.unit)}仅 ${fmt.priceUnit(displayUnitPrice(best.unitPrice, best.unit))}` +
+    `（总量 ${fmt.num(displayQuantity(best.totalQuantity, best.unit))}${displayUnit(best.unit)}），单位成本最低。`,
   )
   if (others.length > 0) {
     const avgOthers =

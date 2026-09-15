@@ -464,7 +464,8 @@ export default function RecognizeReview({
                         value={r.unit}
                         onChange={(e) => setField(i, 'unit', e.target.value)}
                         placeholder="g"
-                        className="field py-1.5 text-xs"
+                        title={r.unit}
+                        className="field py-1.5 text-xs min-w-[3rem]"
                       />
                     )}
                     {!commonPacks && (

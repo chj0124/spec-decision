@@ -41,6 +41,7 @@ export function clusterItems(items: ComputedSku[]): SkuCluster[] {
       quantity: rep.quantity,
       packs: rep.packs,
       unit: rep.unit,
+      packUnit: rep.packUnit,
       members: sortedMembers,
       repUnitPrice: rep.unitPrice,
       minPrice,

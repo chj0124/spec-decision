@@ -86,6 +86,7 @@ export interface SkuCluster {
   quantity: number
   packs: number
   unit: string
+  packUnit?: string // 件数量词（瓶/罐/袋…），缺省时展示层回退
   members: ComputedSku[] // 簇内成员（不同口味等）
   repUnitPrice: number // 簇内最低每单位价格（决策依据）
   minPrice: number // 簇内最低总价
