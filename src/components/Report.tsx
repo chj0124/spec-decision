@@ -247,13 +247,14 @@ function splitWarnText(text: string): { lead: string; detail: string } {
   return { lead: strip(text.slice(0, i)), detail: text.slice(i + 1) }
 }
 
-/* ============ 避坑对照的图形标注：四种画法（都做出来，比较后再做减法） ============ */
+/* ============ 避坑对照的图形标注：五种画法（都做出来，比较后再做减法） ============ */
 
-/** 避坑标注样式：右缘括线 / 行高亮 / 差值段 / 同号徽标 */
-type WarnStyle = 'bracket' | 'band' | 'delta' | 'badge'
+/** 避坑标注样式：差额箭头 / 右缘括线 / 行高亮 / 差值段 / 同号徽标 */
+type WarnStyle = 'arrow' | 'bracket' | 'band' | 'delta' | 'badge'
 
 /** 样式切换器候选（顺序 = 展示顺序）；caption 用于避坑提示标题后的说明 */
 const WARN_STYLE_OPTIONS: Array<{ k: WarnStyle; label: string; hint: string; caption: string }> = [
+  { k: 'arrow', label: '差额箭头', hint: '像经济学图那样：两条横条各拉一条虚线引导到坐标轴，轴边用一根双向箭头量出「贵出来的这一段」，中间铺一块阴影差值带，箭头旁边写清贵了多少。', caption: '图上双向箭头量出的那段阴影就是贵出来的差额' },
   { k: 'bracket', label: '右缘括线', hint: '在图右侧用一个括线把被对照的两条横条框在一起，编号挂在括线中间。', caption: '图上右侧括线框住的正是被对照的两条规格' },
   { k: 'band', label: '行高亮', hint: '把被对照的两条横条整行铺一层淡黄底，像表格里高亮那两行。', caption: '图上铺了淡黄底的两行正是被对照的规格' },
   { k: 'delta', label: '差值段', hint: '在较贵那条上标出「比便宜那条多出来的这一截」，并标清贵了多少。', caption: '图上粗黄段标出了贵出来的那一截' },
@@ -262,6 +263,16 @@ const WARN_STYLE_OPTIONS: Array<{ k: WarnStyle; label: string; hint: string; cap
 
 /** 图例里的小标记：与当前避坑标注画法保持一致 */
 function WarnLegendMark({ warnStyle, color }: { warnStyle: WarnStyle; color: string }) {
+  if (warnStyle === 'arrow') {
+    return (
+      <svg width="20" height="10" viewBox="0 0 20 10" className="inline-block align-middle">
+        <rect x="4" y="1" width="12" height="8" rx="1" fill={color} opacity="0.22" stroke={color} strokeOpacity="0.5" strokeWidth="0.8" strokeDasharray="2 2" />
+        <line x1="4" y1="5" x2="16" y2="5" stroke={color} strokeWidth="1.4" />
+        <path d="M4 5 L7 3.4 L7 6.6 Z" fill={color} />
+        <path d="M16 5 L13 3.4 L13 6.6 Z" fill={color} />
+      </svg>
+    )
+  }
   if (warnStyle === 'band') {
     return <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color, opacity: 0.35 }} />
   }
@@ -348,6 +359,44 @@ function WarnOverlay({
         // 多组对照各自占一条"竖向泳道"，编号也顺次右移，避免几组叠在同一竖线上看着像连成一条
         const laneX = spineX + i * 22
         const badgeX = laneX + 14
+
+        if (warnStyle === 'arrow') {
+          // 把"差额"当成坐标轴上的一个量来标注：轴下留白由 MainVisual 加高 bottom 提供
+          const axisY = offset.top + offset.height
+          const bandTop = Math.min(yA, yB) - bandSize / 2
+          const bandBottom = Math.max(yA, yB) + bandSize / 2
+          const arrowY = axisY + 48
+          const head = 5
+          return (
+            <g key={`warn-${i}`}>
+              {/* 两条横条之间铺一块虚线阴影带：横向只占"贵出来的这一段" */}
+              <rect
+                x={lo}
+                y={bandTop}
+                width={Math.max(hi - lo, 1)}
+                height={bandBottom - bandTop}
+                rx={3}
+                fill={amber}
+                fillOpacity={0.13}
+                stroke={amber}
+                strokeOpacity={0.5}
+                strokeWidth={1}
+                strokeDasharray="3 3"
+              />
+              {/* 从阴影带下沿各引一条虚线到坐标轴，充当读数引导线 */}
+              <line x1={lo} y1={bandBottom} x2={lo} y2={axisY} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+              <line x1={hi} y1={bandBottom} x2={hi} y2={axisY} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
+              {/* 轴边一根双向箭头量出这段差额，旁边写清贵了多少 */}
+              <line x1={lo} y1={arrowY} x2={hi} y2={arrowY} stroke={amber} strokeWidth={1.6} />
+              <path d={`M ${lo} ${arrowY} L ${lo + head} ${arrowY - head * 0.7} L ${lo + head} ${arrowY + head * 0.7} Z`} fill={amber} />
+              <path d={`M ${hi} ${arrowY} L ${hi - head} ${arrowY - head * 0.7} L ${hi - head} ${arrowY + head * 0.7} Z`} fill={amber} />
+              <text x={(lo + hi) / 2} y={arrowY + 15} textAnchor="middle" fill={amber} fontSize={12} fontWeight={700}>
+                {`贵 ${p.pct}%`}
+              </text>
+              {badge(badgeX, midY, no)}
+            </g>
+          )
+        }
 
         if (warnStyle === 'badge') {
           return (
@@ -506,10 +555,12 @@ function MainVisual({
   const avg = data.reduce((s, r) => s + r[dataKey], 0) / Math.max(1, data.length)
   const chartHeight = Math.max(220, data.length * 40 + 60)
 
+  // 差额箭头画法要把"贵出来的一段"标在坐标轴外侧，轴下需要额外留白
+  const needsAxisRoom = warnStyle === 'arrow' && warningPairs.length > 0
   return (
     <div style={{ height: chartHeight }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warningPairs.length ? 100 + (warningPairs.length - 1) * 26 : 72, bottom: 24, left: 4 }} barCategoryGap={12}>
+        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warningPairs.length ? 100 + (warningPairs.length - 1) * 26 : 72, bottom: needsAxisRoom ? 84 : 24, left: 4 }} barCategoryGap={12}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
           <XAxis
             type="number"
@@ -762,8 +813,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
   // 主视觉类型：四种候选编码方式，默认「每单位单价」最直接
   const [visual, setVisual] = useState<VisualKind>('price')
-  // 避坑对照的图形标注样式：四种候选画法，默认右缘括线
-  const [warnStyle, setWarnStyle] = useState<WarnStyle>('bracket')
+  // 避坑对照的图形标注样式：五种候选画法，默认「差额箭头」（参考经济学图的作图和批注方式）
+  const [warnStyle, setWarnStyle] = useState<WarnStyle>('arrow')
   // 逐档明细表默认收起：升档卡片已把结论说完，明细按需展开
   const [showMarginTable, setShowMarginTable] = useState(false)
   // 完整排名表默认收起：报告先给结论，明细按需展开
