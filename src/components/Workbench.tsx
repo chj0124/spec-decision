@@ -403,9 +403,9 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 grid place-items-center bg-ink/70 light:bg-slate-900/40 backdrop-blur-sm pointer-events-none"
           >
-            <div className="rounded-3xl border-2 border-dashed border-cyan-glow/70 bg-panel/80 px-12 py-10 text-center shadow-glow">
-              <UploadCloud className="h-12 w-12 mx-auto text-cyan-glow mb-3 animate-bounce" />
-              <p className="text-lg font-bold text-cyan-glow">松开鼠标，AI 识别截图</p>
+            <div className="rounded-3xl border-2 border-dashed border-brand/70 bg-panel/80 px-12 py-10 text-center shadow-glow">
+              <UploadCloud className="h-12 w-12 mx-auto text-brand mb-3 animate-bounce" />
+              <p className="text-lg font-bold text-brand">松开鼠标，AI 识别截图</p>
               <p className="text-xs text-slate-400 mt-1">自动提取规格与价格</p>
             </div>
           </motion.div>
@@ -417,17 +417,17 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         <div>
           <h2 className="text-3xl sm:text-4xl font-bold tracking-tighter">
             录入规格，
-            <span className="text-cyan-glow">揪出最划算的</span>
+            <span className="text-brand">揪出最划算的</span>
           </h2>
           <p className="mt-2 text-sm text-slate-400 max-w-xl leading-relaxed">
             把每个购买选项的名字、价格、单件含量与件数填进来，系统自动换算每单位价格，并结合附加参数给出推荐。
           </p>
           <p className="mt-1.5 text-xs text-slate-500 flex items-center gap-1.5 flex-wrap">
-            <UploadCloud className="h-3.5 w-3.5 text-cyan-glow/70" />
+            <UploadCloud className="h-3.5 w-3.5 text-brand/70" />
             也可以直接把商品截图<b className="text-slate-600 font-medium">拖到页面任意位置</b>，或截图后按
             <kbd className="px-1.5 py-0.5 rounded border border-edge bg-brand-soft/60 text-sm font-mono">Ctrl+V</kbd>
             粘贴识别。
-            <span className="text-cyan-glow/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
+            <span className="text-brand/80">支持一次拖入多张截图（如不同规格页面），自动合并去重。</span>
             <span className="text-emerald-400/80">也支持直接粘贴 Excel/电商页面表格（Ctrl+V），自动识别列。</span>
           </p>
         </div>
@@ -446,7 +446,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           </button>
           <button
             onClick={() => fileRef.current?.click()}
-            className="px-3 py-2 rounded-lg bg-gradient-to-r from-cyan-glow/20 to-sky-500/20 border border-cyan-glow/40 text-xs font-semibold text-cyan-glow hover:shadow-glow transition-all flex items-center gap-1.5"
+            className="px-3 py-2 rounded-lg bg-gradient-to-r from-brand/20 to-sky-500/20 border border-brand/40 text-xs font-semibold text-brand hover:shadow-glow transition-all flex items-center gap-1.5"
             title="支持一次选择多张截图（如不同 SKU 选择器页面），自动合并去重"
           >
             <ImagePlus className="h-3.5 w-3.5" /> AI 截图识别
@@ -464,7 +464,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
       {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
       {genSummary && !genError && (
-        <div className="flex items-start gap-2 rounded-xl border border-cyan-glow bg-cyan-500 px-3 py-2.5 text-sm text-white">
+        <div className="flex items-start gap-2 rounded-xl border border-brand bg-cyan-500 px-3 py-2.5 text-sm text-white">
           <Sparkles className="h-4 w-4 shrink-0 mt-0.5" />
           <span className="font-medium">{genSummary}</span>
         </div>
@@ -491,11 +491,11 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                 {scanPreviews.map((url, i) => (
                   <div key={i} className="relative h-16 w-16 rounded-lg overflow-hidden border border-edge shrink-0">
                     <img src={url} alt={`扫描 ${i + 1}`} className="h-full w-full object-cover" />
-                    <div className="absolute inset-0 bg-cyan-glow/10">
-                      <div className="absolute inset-x-0 h-0.5 bg-cyan-glow shadow-glow animate-[scan_1.2s_ease-in-out_infinite]" />
+                    <div className="absolute inset-0 bg-brand/10">
+                      <div className="absolute inset-x-0 h-0.5 bg-brand shadow-glow animate-[scan_1.2s_ease-in-out_infinite]" />
                     </div>
                     {scanPreviews.length > 1 && (
-                      <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
+                      <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-brand font-mono font-bold">
                         {i + 1}
                       </span>
                     )}
@@ -504,7 +504,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
               </div>
             )}
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 text-sm text-cyan-glow">
+              <div className="flex items-center gap-2 text-sm text-brand">
                 <Loader2 className="h-4 w-4 animate-spin shrink-0" />
                 <span>
                   {scanPreviews.length > 1
@@ -513,7 +513,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                 </span>
               </div>
               <div className="mt-1.5 flex items-center gap-3 text-sm text-slate-500">
-                <span className="tabular">已等待 <span className={scanElapsed > 30 ? 'text-amber-400 font-semibold' : 'text-cyan-glow'}>{scanElapsed}</span> 秒</span>
+                <span className="tabular">已等待 <span className={scanElapsed > 30 ? 'text-amber-400 font-semibold' : 'text-brand'}>{scanElapsed}</span> 秒</span>
                 {(() => {
                   const ai = loadAiConfig()
                   const vm = getVisionModel(ai)
@@ -561,7 +561,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
           className="w-full px-4 py-3 flex items-center justify-between text-left border-b border-edge bg-brand-soft/40 hover:bg-brand-soft/60 transition-colors"
         >
           <div className="flex items-center gap-2">
-            <Sliders className="h-4 w-4 text-cyan-glow" />
+            <Sliders className="h-4 w-4 text-brand" />
             <span className="text-sm font-semibold">参数维度与权重</span>
             <span className="text-sm text-slate-500">
               {config.dims.length === 0
@@ -601,7 +601,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                           onClick={() => onConfigChange({ ...config, priceWeight: t.value })}
                           className={`px-2 py-1 text-sm rounded transition-all ${
                             config.priceWeight === t.value
-                              ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                              ? 'bg-brand/20 text-brand font-semibold'
                               : 'text-slate-500 hover:text-brand-deep'
                           }`}
                         >
@@ -619,7 +619,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                         onChange={(e) => updateDim(dim.id, { label: e.target.value })}
                         placeholder="维度名"
                         minWidth={90}
-                        className="field py-1.5 text-xs cursor-text hover:border-cyan-glow/60 focus:border-cyan-glow focus:ring-1 focus:ring-cyan-glow/40"
+                        className="field py-1.5 text-xs cursor-text hover:border-brand/60 focus:border-brand focus:ring-1 focus:ring-brand/40"
                       />
                       {isNumericType(dim.type) && (
                         <AutoWidthInput
@@ -665,7 +665,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                             onClick={() => updateDim(dim.id, { weight: t.value })}
                             className={`px-2 py-1 text-sm rounded transition-all ${
                               dim.weight === t.value
-                                ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                                ? 'bg-brand/20 text-brand font-semibold'
                                 : 'text-slate-500 hover:text-brand-deep'
                             }`}
                           >
@@ -685,7 +685,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
                   <button
                     onClick={addDim}
-                    className="w-full py-2 text-xs text-slate-500 hover:text-cyan-glow hover:bg-brand-soft/40 rounded-lg transition-all flex items-center justify-center gap-1.5 border border-dashed border-edge"
+                    className="w-full py-2 text-xs text-slate-500 hover:text-brand hover:bg-brand-soft/40 rounded-lg transition-all flex items-center justify-center gap-1.5 border border-dashed border-edge"
                   >
                     <Plus className="h-3.5 w-3.5" /> 新增参数维度
                   </button>
@@ -786,7 +786,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
                   }}
                   className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                     active
-                      ? 'bg-cyan-glow/20 text-cyan-glow border border-cyan-glow/50'
+                      ? 'bg-brand/20 text-brand border border-brand/50'
                       : 'text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
                   }`}
                 >
@@ -865,7 +865,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
         {/* 表尾：添加行 */}
         <button
           onClick={add}
-          className="w-full py-3 text-xs text-slate-500 hover:text-cyan-glow hover:bg-brand-soft/70 transition-all flex items-center justify-center gap-1.5 border-t border-edge"
+          className="w-full py-3 text-xs text-slate-500 hover:text-brand hover:bg-brand-soft/70 transition-all flex items-center justify-center gap-1.5 border-t border-edge"
         >
           <Plus className="h-4 w-4" /> 添加一行规格
         </button>
@@ -874,7 +874,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       {/* 底部生成 */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass rounded-2xl p-5">
         <p className="text-sm text-slate-400">
-          已填写 <span className="text-cyan-glow font-semibold tabular">{validCount}</span> 个有效规格
+          已填写 <span className="text-brand font-semibold tabular">{validCount}</span> 个有效规格
           {validCount < 2 && '（至少 2 个才能对比）'}
         </p>
         <button
@@ -923,11 +923,11 @@ function GroupRows({ groupKey, items, allSkus, isGrouped, isCollapsed, onToggle,
           <td colSpan={colCount} className="px-3 py-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
               <ChevronDown
-                className={`h-3.5 w-3.5 text-cyan-glow transition-transform duration-200 ${
+                className={`h-3.5 w-3.5 text-brand transition-transform duration-200 ${
                   isCollapsed ? '-rotate-90' : ''
                 }`}
               />
-              <span className="text-cyan-glow">{groupKey}</span>
+              <span className="text-brand">{groupKey}</span>
               <span className="text-slate-500 font-normal">（{items.length} 个规格）</span>
             </div>
           </td>
@@ -1149,7 +1149,7 @@ function RowFields({ s, idx, update, updateParam, remove, indented, dims, flavor
         {total > 0 ? `${fmt.num(total)}${s.unit}` : '—'}
       </td>
       <td className="px-3 py-2 text-right whitespace-nowrap">
-        <span className={`text-xs font-semibold tabular ${up > 0 ? 'text-cyan-glow' : 'text-slate-600'}`}>
+        <span className={`text-xs font-semibold tabular ${up > 0 ? 'text-brand' : 'text-slate-600'}`}>
           {up > 0 ? fmt.price4(up) : '待补充'}
         </span>
         {up > 0 && <span className="text-sm text-slate-500">/{s.unit}</span>}

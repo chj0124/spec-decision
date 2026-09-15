@@ -90,7 +90,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
           >
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-lg font-bold tracking-tight flex items-center gap-2">
-                <Settings className="h-5 w-5 text-cyan-glow" /> AI 服务配置
+                <Settings className="h-5 w-5 text-brand" /> AI 服务配置
               </h3>
               <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="关闭">
                 <X className="h-5 w-5" />
@@ -110,7 +110,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                     onClick={() => applyPreset(p.label)}
                     className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
                       form.baseUrl === p.baseUrl && p.baseUrl
-                        ? 'bg-cyan-glow/15 text-cyan-glow border-cyan-glow/50'
+                        ? 'bg-brand/15 text-brand border-brand/50'
                         : 'text-slate-500 border-edge hover:text-slate-700 hover:border-slate-400'
                     }`}
                   >
@@ -129,7 +129,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                       href={matchedPreset.consoleUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-0.5 text-cyan-glow hover:underline text-xs"
+                      className="inline-flex items-center gap-0.5 text-brand hover:underline text-xs"
                       title={`${matchedPreset.label} 控制台 · 获取 API Key`}
                     >
                       获取 API Key <ExternalLink className="h-3 w-3" />
@@ -159,7 +159,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                   <button
                     onClick={fetchModels}
                     disabled={modelsLoading || !form.apiKey || !form.baseUrl}
-                    className="inline-flex items-center gap-1 text-xs text-cyan-glow hover:underline disabled:opacity-40 disabled:no-underline"
+                    className="inline-flex items-center gap-1 text-xs text-brand hover:underline disabled:opacity-40 disabled:no-underline"
                     title="从服务商拉取可用模型列表"
                   >
                     {modelsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
@@ -181,7 +181,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                         onClick={() => setForm({ ...form, model: m })}
                         className={`px-2 py-0.5 rounded text-xs font-mono transition-all ${
                           form.model === m
-                            ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                            ? 'bg-brand/20 text-brand font-semibold'
                             : 'text-slate-500 hover:bg-brand-soft/60 hover:text-brand-deep'
                         }`}
                         title={`点击选用 ${m}`}
@@ -219,7 +219,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
                           onClick={() => setForm({ ...form, visionModel: m })}
                           className={`px-2 py-0.5 rounded text-xs font-mono transition-all ${
                             form.visionModel === m
-                              ? 'bg-cyan-glow/20 text-cyan-glow font-semibold'
+                              ? 'bg-brand/20 text-brand font-semibold'
                               : 'text-slate-500 hover:bg-brand-soft/60 hover:text-brand-deep'
                           }`}
                           title={`点击选用 ${m}`}
@@ -240,7 +240,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
               <button
                 onClick={test}
                 disabled={testing || !form.apiKey || !form.baseUrl || !form.model}
-                className="px-4 py-2 rounded-lg border border-edge text-xs font-medium text-slate-600 hover:border-cyan-glow/50 hover:text-cyan-glow disabled:opacity-40 transition-all flex items-center gap-1.5"
+                className="px-4 py-2 rounded-lg border border-edge text-xs font-medium text-slate-600 hover:border-brand/50 hover:text-brand disabled:opacity-40 transition-all flex items-center gap-1.5"
               >
                 {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                 测试连接
@@ -255,7 +255,7 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
 
             {/* 隐私说明 */}
             <div className="mt-5 rounded-xl bg-brand-soft/60 border border-edge p-3 flex gap-2">
-              <ShieldCheck className="h-4 w-4 text-cyan-glow shrink-0 mt-0.5" />
+              <ShieldCheck className="h-4 w-4 text-brand shrink-0 mt-0.5" />
               <p className="text-sm text-slate-500 leading-relaxed">
                 密钥仅保存在你的浏览器 localStorage，直接由浏览器发往你配置的服务商，不经过任何第三方服务器。
                 清除浏览器数据会一并删除。

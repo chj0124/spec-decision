@@ -206,7 +206,7 @@ export default function RecognizeReview({
               >
                 <img src={img} alt={`识别截图 ${i + 1}`} className="h-full w-full object-cover" />
                 {isBatch && (
-                  <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-cyan-glow font-mono font-bold">
+                  <span className="absolute top-0.5 left-0.5 text-[9px] px-1 rounded bg-ink/70 text-brand font-mono font-bold">
                     {i + 1}
                   </span>
                 )}
@@ -218,7 +218,7 @@ export default function RecognizeReview({
           <h3 className="text-lg font-bold tracking-tight flex items-center gap-2 flex-wrap">
             {source === 'error' ? '识别失败' : isBatch ? '批量识别结果' : '确认识别结果'}
             {source !== 'error' && (
-              <span className="text-sm px-2 py-0.5 rounded-full bg-cyan-glow/15 text-cyan-glow font-semibold">
+              <span className="text-sm px-2 py-0.5 rounded-full bg-brand/15 text-brand font-semibold">
                 {rows.length} 个规格
               </span>
             )}
@@ -252,7 +252,7 @@ export default function RecognizeReview({
                   <p className="text-sm text-slate-500 mt-2">
                     请到「AI 设置」检查配置：
                     <br />1. Base URL / API Key 是否正确
-                    <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-cyan-glow">qwen-vl-plus</code> / <code className="font-mono text-cyan-glow">glm-4v-flash</code> / <code className="font-mono text-cyan-glow">gpt-4o-mini</code>
+                    <br />2. 视觉模型（Vision Model）是否填了支持视觉的模型，如 <code className="font-mono text-brand">qwen-vl-plus</code> / <code className="font-mono text-brand">glm-4v-flash</code> / <code className="font-mono text-brand">gpt-4o-mini</code>
                     <br />3. DeepSeek 不支持视觉，需换其他服务商
                   </p>
                 )}
@@ -273,7 +273,7 @@ export default function RecognizeReview({
         </div>
         <button
           onClick={reset}
-          className="text-xs text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5 shrink-0"
+          className="text-xs text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 shrink-0"
           title="撤销所有修改，恢复为 AI 原始识别"
         >
           <RotateCcw className="h-3.5 w-3.5" /> 重置
@@ -285,12 +285,12 @@ export default function RecognizeReview({
         <div className="rounded-xl border border-edge bg-brand-soft/30 p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-slate-600 flex items-center gap-1.5">
-              <Sliders className="h-3.5 w-3.5 text-cyan-glow" />
+              <Sliders className="h-3.5 w-3.5 text-brand" />
               识别到的参数维度（导入后自动建好，可在此微调）
             </span>
             <button
               onClick={addDim}
-              className="text-sm text-cyan-glow hover:underline inline-flex items-center gap-1"
+              className="text-sm text-brand hover:underline inline-flex items-center gap-1"
             >
               <Plus className="h-3 w-3" /> 加维度
             </button>
@@ -301,10 +301,10 @@ export default function RecognizeReview({
                 <input
                   value={d.label}
                   onChange={(e) => updateDim(i, { label: e.target.value })}
-                  className="text-sm bg-transparent w-20 outline-none focus:border-cyan-glow"
+                  className="text-sm bg-transparent w-20 outline-none focus:border-brand"
                 />
                 {d.unit && <span className="text-sm text-slate-500">{d.unit}</span>}
-                <span className="text-sm text-cyan-glow font-mono" title={d.type}>
+                <span className="text-sm text-brand font-mono" title={d.type}>
                   {PARAM_TYPE_LABEL[d.type]}
                 </span>
                 <button
@@ -381,7 +381,7 @@ export default function RecognizeReview({
                   {!commonUnit && <span>单位</span>}
                   {!commonPacks && <span>数量</span>}
                   {dimRows.map((d, i) => !commonDimValues[i] && (
-                    <span key={i} className="text-cyan-glow/80" title={`${d.label} ${PARAM_TYPE_LABEL[d.type]}`}>
+                    <span key={i} className="text-brand/80" title={`${d.label} ${PARAM_TYPE_LABEL[d.type]}`}>
                       {d.label}{d.unit ? `(${d.unit})` : ''} {PARAM_TYPE_LABEL[d.type]}
                     </span>
                   ))}
@@ -510,7 +510,7 @@ export default function RecognizeReview({
             {/* 添加行 */}
             <button
               onClick={add}
-              className="w-full rounded-xl border border-dashed border-edge hover:border-cyan-glow/50 py-2.5 text-xs text-slate-500 hover:text-cyan-glow transition-all flex items-center justify-center gap-1.5"
+              className="w-full rounded-xl border border-dashed border-edge hover:border-brand/50 py-2.5 text-xs text-slate-500 hover:text-brand transition-all flex items-center justify-center gap-1.5"
             >
               <Plus className="h-3.5 w-3.5" /> 补一个 AI 漏掉的规格
             </button>
@@ -524,7 +524,7 @@ export default function RecognizeReview({
           {source === 'demo' && '当前为演示识别 · '}
           {source !== 'error' && (
             <>
-              有效 <span className="text-cyan-glow font-semibold tabular">{valid.length}</span> / {rows.length} 条
+              有效 <span className="text-brand font-semibold tabular">{valid.length}</span> / {rows.length} 条
               {valid.length !== rows.length && '（名称/价格/含量/件数 需填全）'}
               {hasDims && ` · 将导入 ${paramCols} 个参数维度`}
               {existingCount > 0 && ` · 工作台已有 ${existingCount} 条，默认替换导入`}
@@ -544,7 +544,7 @@ export default function RecognizeReview({
               onClick={() => onConfirm(valid, dimRows, 'append')}
               disabled={valid.length === 0}
               title="保留现有规格，把识别结果追加到后面"
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl border border-cyan-glow/40 text-sm text-cyan-glow hover:shadow-glow disabled:opacity-40 transition-all"
+              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl border border-brand/40 text-sm text-brand hover:shadow-glow disabled:opacity-40 transition-all"
             >
               追加导入
             </button>

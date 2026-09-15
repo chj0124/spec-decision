@@ -84,7 +84,7 @@ export default function App() {
                 onClick={() => setPage('workbench')}
                 className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors ${
                   page === 'workbench'
-                    ? 'bg-cyan-glow/15 text-cyan-glow'
+                    ? 'bg-brand/15 text-brand'
                     : 'text-slate-400 hover:text-brand-deep'
                 }`}
               >
@@ -96,7 +96,7 @@ export default function App() {
                 disabled={result.items.length === 0}
                 className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium flex items-center gap-1.5 transition-colors disabled:opacity-40 ${
                   page === 'report'
-                    ? 'bg-cyan-glow/15 text-cyan-glow'
+                    ? 'bg-brand/15 text-brand'
                     : 'text-slate-400 hover:text-brand-deep'
                 }`}
               >
@@ -108,7 +108,7 @@ export default function App() {
             {/* AI 设置 */}
             <button
               onClick={() => setSettingsOpen(true)}
-              className="h-9 px-2.5 rounded-lg border border-edge flex items-center gap-1.5 text-slate-600 hover:text-cyan-glow hover:border-cyan-glow/50 transition-all"
+              className="h-9 px-2.5 rounded-lg border border-edge flex items-center gap-1.5 text-slate-600 hover:text-brand hover:border-brand/50 transition-all"
               aria-label="AI 设置"
               title={`AI 服务配置${aiReady ? '（文本已就绪' : '（未配置'}${aiReady && visionReady ? ' + 视觉已就绪' : aiReady ? '，视觉未配置' : ''}）`}
             >
@@ -119,7 +119,7 @@ export default function App() {
             {/* 主题切换 */}
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="h-9 w-9 rounded-lg border border-edge grid place-items-center text-slate-600 hover:text-cyan-glow hover:border-cyan-glow/50 transition-all"
+              className="h-9 w-9 rounded-lg border border-edge grid place-items-center text-slate-600 hover:text-brand hover:border-brand/50 transition-all"
               aria-label="切换主题"
             >
               {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

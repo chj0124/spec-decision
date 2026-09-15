@@ -5,29 +5,37 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Space Grotesk"', 'system-ui', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'monospace'],
+        sans: [
+          '"Space Grotesk"',
+          '"PingFang SC"',
+          '"Hiragino Sans GB"',
+          '"Noto Sans SC"',
+          '"Microsoft YaHei"',
+          'system-ui',
+          'sans-serif',
+        ],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       colors: {
-        // 清新薄荷绿风（参考 Laper）
-        ink: '#0d1f14',          // 极深绿（暗色模式底）
-        panel: '#ffffff',        // 面板白
-        edge: '#d9efe2',         // 浅绿边框
+        // 暖纸 × 靛蓝（editorial paper & indigo）
+        ink: '#16161b',          // 墨黑（暗色模式底 / 深色遮罩）
+        // panel / edge 走 CSS 变量，亮暗主题自动切换（见 index.css :root / html.dark）
+        panel: 'rgb(var(--c-panel) / <alpha-value>)',
+        edge: 'rgb(var(--c-edge) / <alpha-value>)',
         brand: {
-          DEFAULT: '#16a34a',    // 主翠绿
-          strong: '#15803d',     // 深翠绿（标题/强调）
-          deep: '#14532d',       // 墨绿（标题文字）
-          soft: '#dcfce7',       // 浅绿底
-          mist: '#f0fdf4',       // 极浅绿（背景）
-        },
-        cyan: {
-          glow: '#16a34a',       // 兼容旧类名 → 映射为翠绿
+          DEFAULT: '#4f46e5',    // 靛蓝主色（交互 / 强调）
+          strong: '#4338ca',     // 深靛蓝（hover / 强调）
+          // deep 走 CSS 变量：浅色模式为深靛文字，暗色模式自动变亮
+          deep: 'rgb(var(--c-brand-deep) / <alpha-value>)',
+          // soft 走 CSS 变量：浅色为浅靛底，暗色为暗靛底
+          soft: 'rgb(var(--c-brand-soft) / <alpha-value>)',
+          mist: '#f6f5f0',       // 暖纸（浅色模式页面底）
         },
       },
       boxShadow: {
-        glow: '0 4px 24px rgba(22, 163, 74, 0.15)',
-        card: '0 4px 24px rgba(20, 83, 45, 0.08)',
-        soft: '0 1px 3px rgba(20, 83, 45, 0.06)',
+        glow: '0 4px 24px rgba(79, 70, 229, 0.18)',
+        card: '0 1px 2px rgba(22, 22, 27, 0.04), 0 8px 30px rgba(22, 22, 27, 0.06)',
+        soft: '0 1px 3px rgba(22, 22, 27, 0.05)',
       },
     },
   },

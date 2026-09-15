@@ -2,41 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===== 设计令牌：亮 / 暗主题 CSS 变量 =====
+   panel / edge / brand-soft / brand-deep 由变量驱动，
+   Tailwind 里以 rgb(var(--x) / <alpha-value>) 注册，切换 html.dark 即整站换肤 */
 :root {
   color-scheme: light;
+  --c-panel: 255 255 255;        /* 面板：纯白 */
+  --c-edge: 230 225 213;         /* 边框：暖灰 #e6e1d5 */
+  --c-brand-soft: 237 238 252;   /* 浅靛底 #edeefc */
+  --c-brand-deep: 55 48 163;     /* 深靛文字 #3730a3 */
 }
 
 html.dark {
   color-scheme: dark;
+  --c-panel: 28 28 34;           /* 面板：#1c1c22 */
+  --c-edge: 47 47 58;            /* 边框：#2f2f3a */
+  --c-brand-soft: 37 37 58;      /* 浅靛底（暗）#25253a */
+  --c-brand-deep: 165 180 252;   /* 深靛文字（暗）#a5b4fc */
 }
 
-/* ===== 清新薄荷绿风（默认浅色） ===== */
+/* ===== 页面底：暖纸 + 极淡靛蓝晕光 ===== */
 body {
   @apply bg-brand-mist text-slate-800 antialiased;
   background-image:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(34, 197, 94, 0.10), transparent),
-    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(34, 197, 94, 0.06), transparent);
+    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(79, 70, 229, 0.07), transparent),
+    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(79, 70, 229, 0.045), transparent);
   background-attachment: fixed;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* 暗色模式：深绿调 */
+/* 暗色模式：墨黑 + 靛蓝晕光 */
 html.dark body {
-  @apply bg-ink text-emerald-50;
+  @apply bg-ink text-slate-200;
   background-image:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(34, 197, 94, 0.14), transparent),
-    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(34, 197, 94, 0.08), transparent);
+    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(99, 102, 241, 0.16), transparent),
+    radial-gradient(ellipse 60% 40% at 85% 0%, rgba(99, 102, 241, 0.09), transparent);
+}
+
+/* 文字选区 */
+::selection {
+  background: rgba(79, 70, 229, 0.22);
 }
 
 /* ===== 面板（玻璃拟态） ===== */
 .glass {
-  @apply bg-white/85 border border-edge backdrop-blur-xl;
-  box-shadow: 0 1px 3px rgba(20, 83, 45, 0.05), 0 8px 30px rgba(20, 83, 45, 0.06);
+  @apply bg-panel/85 border border-edge backdrop-blur-xl;
+  box-shadow: 0 1px 2px rgba(22, 22, 27, 0.04), 0 8px 30px rgba(22, 22, 27, 0.06);
 }
 
 html.dark .glass {
-  @apply bg-emerald-950/40 border-emerald-800/40;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  @apply bg-panel/75 border-edge;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 30px rgba(0, 0, 0, 0.3);
 }
 
 /* 页面切换淡入动画（替代 AnimatePresence mode="wait"，避免 exit 动画卡住导致白屏） */
@@ -48,37 +64,38 @@ html.dark .glass {
 /* 数字等宽 */
 .tabular {
   font-variant-numeric: tabular-nums;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 /* ===== 输入框 ===== */
 .field {
-  @apply w-full rounded-lg bg-white border border-edge px-3 py-2 text-sm text-slate-800
+  @apply w-full rounded-lg bg-panel border border-edge px-3 py-2 text-sm text-slate-800
     placeholder:text-slate-400 outline-none transition-all duration-200
     focus:border-brand focus:ring-2 focus:ring-brand/20;
 }
 
 html.dark .field {
-  @apply bg-emerald-950/50 border-emerald-800/50 text-emerald-50 focus:border-brand;
+  @apply bg-white/[0.04] border-edge text-slate-100 placeholder:text-slate-500
+    focus:border-brand focus:ring-brand/25;
 }
 
-/* ===== 排名奖牌 ===== */
-.rank-1 { background: linear-gradient(135deg, #22c55e, #16a34a); color: #fff; }
-.rank-2 { background: linear-gradient(135deg, #86efac, #4ade80); color: #14532d; }
-.rank-3 { background: linear-gradient(135deg, #bbf7d0, #86efac); color: #14532d; }
+/* ===== 排名奖牌：金 / 银 / 铜 ===== */
+.rank-1 { background: linear-gradient(135deg, #f59e0b, #d97706); color: #fff; }
+.rank-2 { background: linear-gradient(135deg, #cbd5e1, #94a3b8); color: #334155; }
+.rank-3 { background: linear-gradient(135deg, #d6a77a, #b07d4f); color: #fff; }
 
-/* 网格纹理（极浅绿） */
+/* 网格纹理（暖灰，暗色为淡靛） */
 .grid-texture {
   background-image:
-    linear-gradient(rgba(22, 163, 74, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(22, 163, 74, 0.05) 1px, transparent 1px);
+    linear-gradient(rgba(22, 22, 27, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22, 22, 27, 0.035) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
 html.dark .grid-texture {
   background-image:
-    linear-gradient(rgba(52, 211, 153, 0.06) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(52, 211, 153, 0.06) 1px, transparent 1px);
+    linear-gradient(rgba(129, 140, 248, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(129, 140, 248, 0.05) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
@@ -86,11 +103,12 @@ html.dark .grid-texture {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #bbf7d0;
+  background: #d8d3c6;
   border-radius: 6px;
 }
-::-webkit-scrollbar-thumb:hover { background: #86efac; }
-html.dark ::-webkit-scrollbar-thumb { background: #166534; }
+::-webkit-scrollbar-thumb:hover { background: #c4beaf; }
+html.dark ::-webkit-scrollbar-thumb { background: #3a3a46; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #4a4a58; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

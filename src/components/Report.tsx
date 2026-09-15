@@ -39,7 +39,7 @@ const tooltipItemStyle = { color: '#e2e8f0' }
 
 /** 边际效益分级样式映射：row=行底色弱高亮，bar=左侧色条颜色（inline style 用） */
 const GRADE_STYLE: Record<string, { label: string; badge: string; dot: string; row: string; bar: string }> = {
-  great: { label: '闭眼入', badge: 'bg-cyan-glow/15 text-cyan-glow', dot: 'bg-cyan-glow', row: 'bg-cyan-glow/5',  bar: '#06b6d4' },
+  great: { label: '闭眼入', badge: 'bg-brand/15 text-brand', dot: 'bg-brand', row: 'bg-brand/5',  bar: '#06b6d4' },
   good:  { label: '划算',   badge: 'bg-sky-500/15 text-sky-400',     dot: 'bg-sky-400',     row: 'bg-sky-500/5',    bar: '#0ea5e9' },
   fair:  { label: '持平',   badge: 'bg-slate-500/20 text-slate-300', dot: 'bg-slate-400',   row: '',                bar: '#64748b' },
   poor:  { label: '小亏',   badge: 'bg-amber-500/15 text-amber-400', dot: 'bg-amber-400',   row: 'bg-amber-500/5',  bar: '#f59e0b' },
@@ -213,7 +213,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         {budgetEmpty ? (
           <>
             <p className="text-slate-400">
-              预算 <span className="text-cyan-glow font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
+              预算 <span className="text-brand font-semibold">{fmt.yuan(config.budget ?? 0)}</span> 内没有可用规格
               （{result.budgetExcluded} 个规格全部超出预算）。
             </p>
             <p className="text-sm text-slate-500 -mt-2">可提高预算，或切换为「性价比优先 / 综合得分优先」再看。</p>
@@ -223,7 +223,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         )}
         <button
           onClick={onBack}
-          className="px-5 py-2.5 rounded-xl bg-cyan-glow/15 text-cyan-glow text-sm font-semibold hover:bg-cyan-glow/25 transition-all inline-flex items-center gap-2"
+          className="px-5 py-2.5 rounded-xl bg-brand/15 text-brand text-sm font-semibold hover:bg-brand/25 transition-all inline-flex items-center gap-2"
         >
           <ArrowLeft className="h-4 w-4" /> {budgetEmpty ? '返回调整' : '返回工作台'}
         </button>
@@ -266,7 +266,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={onBack}
-            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5"
+            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5"
           >
             <ArrowLeft className="h-4 w-4" /> 返回编辑
           </button>
@@ -274,14 +274,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           {/* 导出：打印为 PDF（浏览器打印对话框，配合打印样式）+ 复制纯文本摘要 */}
           <button
             onClick={() => window.print()}
-            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5 no-print"
+            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
             title="调起浏览器打印对话框，可另存为 PDF（已隐藏页头页脚与按钮，只打印报告内容）"
           >
             <Printer className="h-4 w-4" /> 打印 / PDF
           </button>
           <button
             onClick={copySummary}
-            className="text-sm text-slate-400 hover:text-cyan-glow transition-colors inline-flex items-center gap-1.5 no-print"
+            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
             title="复制纯文本决策摘要（推荐规格、排名、边际效益与避坑提示）到剪贴板"
           >
             {copied
@@ -304,7 +304,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 onClick={() => onPreferenceChange(opt.key)}
                 className={`px-3 py-1.5 text-xs font-medium transition-colors ${
                   config.preference === opt.key
-                    ? 'bg-cyan-glow/15 text-cyan-glow'
+                    ? 'bg-brand/15 text-brand'
                     : 'text-slate-400 hover:text-brand-deep'
                 }`}
               >
@@ -348,9 +348,9 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           animate={{ opacity: 1, y: 0 }}
           className="glass rounded-3xl p-6 sm:p-8 relative overflow-hidden"
         >
-          <div className="absolute -top-20 -right-20 h-64 w-64 rounded-full bg-cyan-glow/10 blur-3xl" />
+          <div className="absolute -top-20 -right-20 h-64 w-64 rounded-full bg-brand/10 blur-3xl" />
           <div className="relative">
-            <div className="flex items-center gap-2 text-cyan-glow text-sm font-semibold mb-3">
+            <div className="flex items-center gap-2 text-brand text-sm font-semibold mb-3">
               <Trophy className="h-4 w-4" /> 本期最划算
             </div>
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
@@ -359,7 +359,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
                   <div>
                     <div className="text-sm text-slate-400 mb-0.5">每{best.unit}单价</div>
-                    <div className="text-2xl font-bold text-cyan-glow tabular">
+                    <div className="text-2xl font-bold text-brand tabular">
                       {fmt.priceUnit(best.unitPrice)}
                     </div>
                   </div>
@@ -386,12 +386,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               {/* 推荐理由 */}
               <div className="lg:w-96 rounded-2xl bg-brand-soft/60 border border-edge p-5">
                 <div className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-1.5">
-                  <Lightbulb className="h-3.5 w-3.5 text-cyan-glow" /> 推荐理由
+                  <Lightbulb className="h-3.5 w-3.5 text-brand" /> 推荐理由
                 </div>
                 <ul className="space-y-2">
                   {reasons.map((r, i) => (
                     <li key={i} className="text-xs text-slate-400 leading-relaxed flex gap-2">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-cyan-glow shrink-0 mt-0.5" />
+                      <CheckCircle2 className="h-3.5 w-3.5 text-brand shrink-0 mt-0.5" />
                       {r}
                     </li>
                   ))}
@@ -415,7 +415,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <button
                   onClick={() => switchView('cluster')}
                   className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
-                    view === 'cluster' ? 'bg-cyan-glow/15 text-cyan-glow' : 'text-slate-400 hover:text-brand-deep'
+                    view === 'cluster' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
                   }`}
                 >
                   <Layers className="h-3.5 w-3.5" /> 简化视图
@@ -423,7 +423,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                 <button
                   onClick={() => switchView('full')}
                   className={`px-3 py-1.5 font-medium flex items-center gap-1.5 transition-colors ${
-                    view === 'full' ? 'bg-cyan-glow/15 text-cyan-glow' : 'text-slate-400 hover:text-brand-deep'
+                    view === 'full' ? 'bg-brand/15 text-brand' : 'text-slate-400 hover:text-brand-deep'
                   }`}
                 >
                   <List className="h-3.5 w-3.5" /> 全部 {items.length} 项
@@ -459,7 +459,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                         }}
                         className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
                           active
-                            ? 'bg-cyan-glow/15 text-cyan-glow border border-cyan-glow/50'
+                            ? 'bg-brand/15 text-brand border border-brand/50'
                             : 'text-slate-400 hover:text-brand-deep border border-edge'
                         }`}
                       >
@@ -522,7 +522,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
       {margins.length > 0 && (
         <section className="glass rounded-2xl p-6">
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <TrendingDown className="h-5 w-5 text-cyan-glow" /> 单价对比 & 边际效益
+            <TrendingDown className="h-5 w-5 text-brand" /> 单价对比 & 边际效益
           </h3>
           <p className="text-xs text-slate-500 mb-5">
             双轴合一图：青柱=单价，橙柱=升档的边际成本（每多买 1 基准单位花多少），绿线=相对上一档单价降幅% ·
@@ -532,7 +532,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           {/* 双轴合一图：单价柱（青）+ 边际成本柱（橙）+ 降幅折线（绿，右轴%） */}
           <div className="mb-6 rounded-xl border border-edge bg-brand-soft/20 p-4">
             <div className="text-sm text-slate-500 mb-2 flex items-center gap-2 flex-wrap">
-              <span className="inline-block w-3 h-3 rounded-sm bg-cyan-glow" /> 单价（青）
+              <span className="inline-block w-3 h-3 rounded-sm bg-brand" /> 单价（青）
               <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> 边际成本（橙）
               <span className="inline-block w-3 h-3 rounded-sm bg-emerald-400" /> 降幅（绿·右轴%）
               <span className="text-slate-600">· 按总量升序=升档顺序</span>
@@ -715,10 +715,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                       </td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(m.extraCost)}</td>
                       <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(m.extraQuantity)}{m.unit}</td>
-                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-cyan-glow' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+                      <td className={`px-2 py-2.5 text-right tabular font-semibold ${m.unitPriceDropPct > 0 ? 'text-brand' : m.unitPriceDropPct < 0 ? 'text-red-400' : 'text-slate-400'}`}>
                         {m.unitPriceDropPct > 0 ? '-' : m.unitPriceDropPct < 0 ? '+' : ''}{Math.abs(m.unitPriceDropPct).toFixed(1)}%
                       </td>
-                      <td className="px-2 py-2.5 text-right tabular font-semibold text-cyan-glow">
+                      <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">
                         {perExtraYuan > 0 ? `${fmt.num(perExtraYuan)}${m.unit}` : '—'}
                       </td>
                     </tr>
@@ -760,7 +760,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
       {radar && (
         <section className="glass rounded-2xl p-6">
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
-            <RadarIcon className="h-5 w-5 text-cyan-glow" /> 多维能力对比
+            <RadarIcon className="h-5 w-5 text-brand" /> 多维能力对比
           </h3>
           <p className="text-xs text-slate-500 mb-5">
             {view === 'cluster' ? '每个簇取最省钱成员为代表 · ' : '展示排名前 5 的规格 · '}
@@ -814,7 +814,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
       animate={{ opacity: 1, x: 0 }}
       transition={{ delay: idx * 0.06 }}
       className={`glass rounded-2xl p-4 ${
-        cluster.isBest ? 'ring-1 ring-cyan-glow/50 shadow-glow' : ''
+        cluster.isBest ? 'ring-1 ring-brand/50 shadow-glow' : ''
       }`}
     >
       <div className="flex items-center gap-4">
@@ -829,7 +829,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-semibold text-sm">{cluster.label}</span>
             {cluster.isBest && (
-              <span className="text-sm px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow font-semibold">
+              <span className="text-sm px-1.5 py-0.5 rounded bg-brand/15 text-brand font-semibold">
                 推荐
               </span>
             )}
@@ -848,7 +848,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
         </div>
         <div className="text-right shrink-0">
           <div className="text-base font-bold tabular">
-            <span className="text-cyan-glow">{fmt.priceUnit(cluster.repUnitPrice)}</span>
+            <span className="text-brand">{fmt.priceUnit(cluster.repUnitPrice)}</span>
             <span className="text-sm text-slate-500 font-normal"> /{cluster.unit}</span>
           </div>
           <div className="text-sm text-slate-500">{cluster.packs > 1 ? '每包' : '每件'} {fmt.yuan(active.price / Math.max(1, cluster.packs))}</div>
@@ -872,7 +872,7 @@ function ClusterCard({ cluster, idx, flavorLabel }: { cluster: SkuCluster; idx: 
                 onClick={() => setActiveId(m.id)}
                 className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all tabular ${
                   m.id === activeId
-                    ? 'bg-cyan-glow/20 text-cyan-glow border border-cyan-glow/50'
+                    ? 'bg-brand/20 text-brand border border-brand/50'
                     : 'bg-brand-soft/50 text-slate-400 border border-edge hover:text-brand-deep hover:border-slate-600'
                 }`}
               >
@@ -934,11 +934,11 @@ function RankGroupRows({
           <td colSpan={colCount} className="px-2 py-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
               <ChevronDown
-                className={`h-3.5 w-3.5 text-cyan-glow transition-transform duration-200 ${
+                className={`h-3.5 w-3.5 text-brand transition-transform duration-200 ${
                   isCollapsed ? '-rotate-90' : ''
                 }`}
               />
-              <span className="text-cyan-glow">{groupKey}</span>
+              <span className="text-brand">{groupKey}</span>
               <span className="text-slate-500 font-normal">（{groupItems.length} 个规格）</span>
             </div>
           </td>
@@ -957,7 +957,7 @@ function RankGroupRows({
             <tr
               key={item.id}
               className={`border-b border-edge/50 hover:bg-brand-soft/30 transition-colors ${
-                item.isBest ? 'bg-cyan-glow/5' : ''
+                item.isBest ? 'bg-brand/5' : ''
               } ${flavorBg && !item.isBest ? flavorBg : ''}`}
             >
               <td className="px-2 py-2.5 text-center">
@@ -975,13 +975,13 @@ function RankGroupRows({
                 <div className="flex items-center gap-2">
                   <span className="font-medium truncate max-w-[180px]" title={item.name}>{item.name}</span>
                   {item.isBest && (
-                    <span className="px-1.5 py-0.5 rounded bg-cyan-glow/15 text-cyan-glow text-xs font-semibold">推荐</span>
+                    <span className="px-1.5 py-0.5 rounded bg-brand/15 text-brand text-xs font-semibold">推荐</span>
                   )}
                 </div>
               </td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.yuan(item.price)}</td>
               <td className="px-2 py-2.5 text-right tabular text-brand-deep">{fmt.num(item.totalQuantity)}{item.unit}</td>
-              <td className="px-2 py-2.5 text-right tabular font-semibold text-cyan-glow">{fmt.priceUnit(item.unitPrice)}</td>
+              <td className="px-2 py-2.5 text-right tabular font-semibold text-brand">{fmt.priceUnit(item.unitPrice)}</td>
               <td className="px-2 py-2.5 text-right tabular text-slate-300">{fmt.yuan(item.packPrice)}</td>
             </tr>
           )
