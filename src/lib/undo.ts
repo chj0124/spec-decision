@@ -65,3 +65,88 @@ export function restoreScenario(w: Workspace, slot: DeleteSlot): Workspace {
 export function applyUndo(w: Workspace, slot: UndoSlot): Workspace {
   return slot.kind === 'delete' ? restoreScenario(w, slot) : slot.snapshot
 }
+
+/* ---------- 有界撤销栈（F4）----------
+ * 上面那套"单槽 + TTL"只覆盖破坏性操作（删除清单 / 覆盖导入），且十秒即失效，
+ * 连改三次字段只能一路改回去。这里补一条常规的撤销 / 重做历史：
+ *  - 每次改动前记一份快照，`past` / `future` 两个序列就是"撤销"与"重做"两向的路；
+ *  - 快照存的是 Workspace 引用：状态更新走不可变风格，快照间天然结构共享，
+ *    50 步历史并不会真复制 50 份工作区；
+ *  - 危险操作（captureDelete / captureImport）额外压一步，于是"删除清单"既能用
+ *    toast 外科式撤销，也能被 Ctrl/Cmd+Z 整份回退 —— 合并而非替换。
+ */
+
+/** 历史栈上限：超出后丢弃最旧的一步（更早的状态已没什么用处，内存也要可控） */
+export const HISTORY_LIMIT = 50
+
+export interface History {
+  /** 由旧到新：每一步的"改动前"状态，栈顶（末尾）就是上一步 */
+  past: Workspace[]
+  /** 由近到远：被撤销掉的状态，栈顶（开头）就是下一步重做 */
+  future: Workspace[]
+}
+
+export const emptyHistory: History = { past: [], future: [] }
+
+/** 只保留尾部 limit 个，丢弃最旧的（past 用：新的一步压在末尾） */
+function capTail<T>(arr: T[], limit: number): T[] {
+  return arr.length > limit ? arr.slice(arr.length - limit) : arr
+}
+
+/** 只保留头部 limit 个，丢弃最旧的（future 用：下一步在开头） */
+function capHead<T>(arr: T[], limit: number): T[] {
+  return arr.length > limit ? arr.slice(0, limit) : arr
+}
+
+export function canUndo(h: History): boolean {
+  return h.past.length > 0
+}
+
+export function canRedo(h: History): boolean {
+  return h.future.length > 0
+}
+
+/**
+ * 记一次改动：把"改动前"的工作区压入 past，并丢弃 redo 分支
+ * （分叉后再重做旧分支会得到自相矛盾的状态，所以任何新改动都清空 future）。
+ *
+ * 同一次用户动作可能在同一批次里触发多次改动（典型如"生成示例"先后改清单与配置），
+ * 它们拿到的"改动前"是同一个引用 —— 此时不重复压栈，保证一次动作 = 一步撤销。
+ */
+export function pushHistory(h: History, before: Workspace, limit = HISTORY_LIMIT): History {
+  const top = h.past[h.past.length - 1]
+  if (top === before) return h.future.length === 0 ? h : { past: h.past, future: [] }
+  return { past: capTail([...h.past, before], limit), future: [] }
+}
+
+/** 撤回一步：当前状态存入 future，返回上一步；已在最早一步时返回 null */
+export function undoHistory(
+  h: History,
+  current: Workspace,
+  limit = HISTORY_LIMIT,
+): { workspace: Workspace; history: History } | null {
+  if (h.past.length === 0) return null
+  return {
+    workspace: h.past[h.past.length - 1],
+    history: {
+      past: h.past.slice(0, -1),
+      future: capHead([current, ...h.future], limit),
+    },
+  }
+}
+
+/** 重做一步：与 undoHistory 对称 */
+export function redoHistory(
+  h: History,
+  current: Workspace,
+  limit = HISTORY_LIMIT,
+): { workspace: Workspace; history: History } | null {
+  if (h.future.length === 0) return null
+  return {
+    workspace: h.future[0],
+    history: {
+      past: capTail([...h.past, current], limit),
+      future: h.future.slice(1),
+    },
+  }
+}

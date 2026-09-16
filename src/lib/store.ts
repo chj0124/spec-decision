@@ -634,8 +634,12 @@ function contentKey(ws: Workspace): string {
   })
 }
 
-/** 两份工作区是否同内容（忽略 rev 与"触碰时间"，它们只反映落盘次序 / 何时被动过） */
-function sameWorkspace(a: Workspace, b: Workspace): boolean {
+/**
+ * 两份工作区是否同内容（忽略 rev 与"触碰时间"，它们只反映落盘次序 / 何时被动过）。
+ * 除"草稿是否已同步"的判定外，也供调用方判断"内存态是否已与落盘同内容" ——
+ * 据此决定还有没有必要再写一次草稿。
+ */
+export function sameWorkspace(a: Workspace, b: Workspace): boolean {
   return contentKey(a) === contentKey(b)
 }
 

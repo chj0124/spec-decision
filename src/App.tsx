@@ -7,15 +7,18 @@ import {
   exportWorkspace, importWorkspace,
   commitWorkspace, readStoredRev, subscribeWorkspaceChange,
   onPersistIssue, getPersistIssue, clearPersistIssues,
-  createDraftScheduler, loadRecoverableDraft, clearDraft,
+  createDraftScheduler, loadRecoverableDraft, clearDraft, sameWorkspace,
 } from './lib/store'
 import type { Scenario, Workspace, PersistIssue, DraftRecord, DraftScheduler } from './lib/store'
 import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
 import type { ShareData } from './lib/share'
 import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
 import type { AiConfig } from './lib/ai'
-import { UNDO_TTL_MS, captureDelete, captureImport, removeScenario, applyUndo } from './lib/undo'
-import type { UndoSlot } from './lib/undo'
+import {
+  UNDO_TTL_MS, captureDelete, captureImport, removeScenario, applyUndo,
+  emptyHistory, pushHistory, undoHistory, redoHistory,
+} from './lib/undo'
+import type { UndoSlot, History } from './lib/undo'
 import { useUnitNormalize } from './lib/useUnitNormalize'
 import { unitMixWarning } from './lib/engine'
 import Workbench from './components/Workbench'
@@ -66,6 +69,12 @@ export default function App() {
    * 启动时读一次即刻固化到内存：此后即使用户继续编辑冲掉了草稿键，提示条依然有效。
    */
   const [draft, setDraft] = useState<DraftRecord | null>(() => loadRecoverableDraft())
+  /**
+   * 常规编辑的撤销 / 重做历史（F4）。与上面的"撤销槽"是两套：
+   * 槽负责破坏性操作的限时提示条，这里负责 Ctrl/Cmd+Z 逐级回退任意改动。
+   * 栈是本标签页私有的：快照只反映本页演化，不跨标签页共享。
+   */
+  const [history, setHistory] = useState<History>(emptyHistory)
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
@@ -78,6 +87,14 @@ export default function App() {
   // 其他标签页改了工作区（storage 事件 / BroadcastChannel）：只提示，不静默覆盖本页
   useEffect(() => subscribeWorkspaceChange(() => setExternalChange(true)), [])
 
+  // 草稿节流器（F6）：提前建好 —— 下面的落盘副作用要在"提交成功"时用它可以丢掉落盘后
+  // 已无意义的待写草稿。
+  const draftSchedulerRef = useRef<DraftScheduler | null>(null)
+  if (!draftSchedulerRef.current) draftSchedulerRef.current = createDraftScheduler()
+  const draftScheduler = draftSchedulerRef.current
+  /** 已交给节流器的最后一版；初始为启动态，免得刚打开就为"没改过的工作区"写草稿 */
+  const lastDrafted = useRef<Workspace>(boot)
+
   // 落盘走带版本号守卫的提交：若已落后于其他标签页则拒绝覆盖并提示，
   // 而不是把对方整份改动盖掉（风险卡 D3）。提交成功后把本页 rev 对齐到落盘值，
   // 内容未变的下一次提交会被跳过，因此不会自激成环。
@@ -89,6 +106,12 @@ export default function App() {
         setExternalChange(true)
         return
       }
+      // 落盘成功：这份内容已经进了共享数据，为它排的待写草稿再无存在价值，必须主动丢弃。
+      // 节流窗口尾沿的"补写"会晚一步执行：若留着它，就会把别的标签页"真没同步上"的
+      // 草稿冲掉 —— 草稿键是全标签页共用的，之后重开的那页便会误判为"有未同步改动"，
+      // 无端弹出恢复条（这正是"数据已同步后重开不再打扰"间歇失败的根因）。
+      // 只在节流器手上最后一版就是这份刚落盘内容时才丢；用户若又改了更新的内容，保留它。
+      if (sameWorkspace(lastDrafted.current, res.workspace)) draftScheduler.cancel()
       // 提交会把工作区规范化后落盘，这里把内存态对齐到规范化形态：
       // 既让 rev 跟上落盘值，也确保"读回来的形态 === 内存形态"，避免同一份内容
       // 因清洗补全（如 priceHistory 播种）被反复判定为"已变"而无谓写入。
@@ -100,7 +123,7 @@ export default function App() {
       )
     })
     return () => { cancelled = true }
-  }, [workspace])
+  }, [workspace, draftScheduler])
 
   /* ---------- 自动草稿（F6）：崩溃 / 关页的恢复安全网 ----------
    * 编辑中把工作区节流写进本页私有的草稿键（不进 rev 竞争、不写主数据键）：
@@ -108,16 +131,14 @@ export default function App() {
    *  - 提交被判"过期"时本页改动根本进不了共享数据，关页即永久丢失（风险卡 D3）。
    * 草稿是这两条缝的兜底：内容与落盘一致时重开会静默清掉，不打扰用户。
    */
-  const draftSchedulerRef = useRef<DraftScheduler | null>(null)
-  if (!draftSchedulerRef.current) draftSchedulerRef.current = createDraftScheduler()
-  const draftScheduler = draftSchedulerRef.current
-  /** 已交给节流器的最后一版；初始为启动态，免得刚打开就为"没改过的工作区"写草稿 */
-  const lastDrafted = useRef<Workspace>(boot)
-
   useEffect(() => {
     // 待恢复草稿还没处理时不动草稿键：否则刚打开就把上一条未处理的草稿冲掉
     if (shared || draft) return
-    if (lastDrafted.current === workspace) return
+    // 内容与"已交给节流器的最后一版"一致时不必再写。提交成功会把内存态对齐到
+    // 规范化形态（新引用、同内容），若只比引用就会为这份"其实已落盘"的副本再排一次补写；
+    // 草稿键是全标签页共用的，那次迟到的补写会把别页仍未同步的草稿冲掉 ——
+    // 这正是"数据已同步后重开不再打扰"时好时坏的根因。
+    if (sameWorkspace(lastDrafted.current, workspace)) return
     lastDrafted.current = workspace
     draftScheduler.schedule(workspace, workspace.rev)
   }, [workspace, shared, draft, draftScheduler])
@@ -173,6 +194,32 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [undo])
 
+  /* ---------- 撤销 / 重做历史（F4）----------
+   * Ctrl/Cmd+Z 逐级回退，Ctrl/Cmd+Shift+Z 逐级重做。回退得到的是"改动前"的整份快照，
+   * 因此编辑字段、增删清单、覆盖导入都能回退；删除清单 / 覆盖导入另外还留着限时撤销条，
+   * 两套入口指向同一次改动，互不冲突。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // 只读分享视图不接管快捷键，交还浏览器原生行为
+      if (shared) return
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+      // 拦下原生的输入框撤销，统一走工作区级历史，保证"撤的是整份改动"而不是某个字符
+      e.preventDefault()
+      const res = e.shiftKey
+        ? redoHistory(history, workspace)
+        : undoHistory(history, workspace)
+      if (!res) return
+      setHistory(res.history)
+      // 回退的是整份旧快照，rev 要重新对齐当前落盘值，否则会被"过期"守卫误判为陈旧写入
+      setWorkspace({ ...res.workspace, rev: readStoredRev() })
+      // 键盘回退会整份换掉工作区：限时撤销条不再指向同一次改动，收起它免得两套入口打架
+      setUndo(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [shared, history, workspace])
+
   const handleSaveAi = (c: AiConfig) => {
     saveAiConfig(c)
     setAiConfig(c)
@@ -180,11 +227,19 @@ export default function App() {
 
   /* ---------- 清单（场景）管理 ---------- */
 
+  /**
+   * 在任何一次改动前把"当前工作区"压入撤销栈（F4）。
+   * 读的是渲染闭包里的 workspace，因此同一次用户动作里连着的多笔改动
+   * （如"生成示例数据"会同时改 SKU 与配置）拿到的是同一个引用，只记一步。
+   */
+  const recordHistory = () => setHistory((h) => pushHistory(h, workspace))
+
   const setSkus = (next: Sku[]) => {
     if (shared) {
       setShared((s) => (s ? { ...s, skus: next } : s))
       return
     }
+    recordHistory()
     setWorkspace((w) => patchActive(w, { skus: next }))
   }
 
@@ -193,27 +248,40 @@ export default function App() {
       setShared((s) => (s ? { ...s, config: next } : s))
       return
     }
+    recordHistory()
     setWorkspace((w) => patchActive(w, { config: next }))
   }
 
-  const switchScenario = (id: string) => setWorkspace((w) => ({ ...w, activeId: id }))
+  const switchScenario = (id: string) => {
+    if (id === workspace.activeId) return
+    recordHistory()
+    setWorkspace((w) => ({ ...w, activeId: id }))
+  }
 
-  const createScenario = (name: string) => setWorkspace((w) => {
-    const sc = newScenario(name)
-    return { scenarios: [...w.scenarios, sc], activeId: sc.id, rev: w.rev }
-  })
+  const createScenario = (name: string) => {
+    recordHistory()
+    setWorkspace((w) => {
+      const sc = newScenario(name)
+      return { scenarios: [...w.scenarios, sc], activeId: sc.id, rev: w.rev }
+    })
+  }
 
   // 改名也是一次改动，同样刷新 updatedAt，否则清单条上的"多久没动过"会失真
-  const renameScenario = (id: string, name: string) =>
+  const renameScenario = (id: string, name: string) => {
+    recordHistory()
     setWorkspace((w) => ({
       ...w,
       scenarios: w.scenarios.map((s) => (s.id === id ? { ...s, name, updatedAt: Date.now() } : s)),
     }))
+  }
 
   const deleteScenario = (id: string) => {
     // 先留撤销槽再删：captureDelete 要拿原位置与被删清单的内容，删完就取不到了
     const slot = captureDelete(workspace, id)
     if (!slot) return
+    // 删除既压撤销栈（Ctrl/Cmd+Z 可整份回退），也留限时撤销条（外科式放回原位置）——
+    // 两套入口指向同一次删除，合并而非替换
+    recordHistory()
     setUndo(slot)
     setWorkspace((w) => removeScenario(w, id))
   }
@@ -221,6 +289,8 @@ export default function App() {
   /** 撤销最近一次破坏性操作（删除清单 / 覆盖导入） */
   const undoDestructive = () => {
     if (!undo) return
+    // 撤销条本身也是一次改动：记一步，于是 Ctrl/Cmd+Shift+Z 还能重做掉这次删除
+    recordHistory()
     setWorkspace((w) => applyUndo(w, undo))
     setUndo(null)
   }
@@ -240,6 +310,8 @@ export default function App() {
   /** 恢复上次没同步上的草稿：改动回到编辑器；版本号对齐落盘值，免得被"过期"守卫误伤 */
   const restoreDraft = () => {
     if (!draft) return
+    // 恢复会整份换掉当前内容，先记一步：按错"恢复"还能 Ctrl/Cmd+Z 退回
+    recordHistory()
     setWorkspace({ ...draft.workspace, rev: readStoredRev() })
     clearDraft()
     setDraft(null)
@@ -280,7 +352,8 @@ export default function App() {
 
   const confirmImport = () => {
     if (!pendingImport) return
-    // 覆盖导入会整份换掉工作区，先把旧的收进撤销槽
+    // 覆盖导入会整份换掉工作区，先把它压进撤销栈，再把旧的收进撤销槽
+    recordHistory()
     setUndo(captureImport(workspace, pendingImport))
     // 覆盖导入是用户显式动作：版本号对齐到当前落盘值，避免被"过期"守卫误伤
     setWorkspace({ ...pendingImport, rev: readStoredRev() })
@@ -304,6 +377,7 @@ export default function App() {
     const d = new Date()
     const name = `分享导入 ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const sc = newScenario(name, shared.skus, shared.config)
+    recordHistory()
     setWorkspace((w) => ({ scenarios: [...w.scenarios, sc], activeId: sc.id, rev: w.rev }))
     exitShared()
     setPage('workbench')
