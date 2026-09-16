@@ -112,14 +112,18 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const [genLoading, setGenLoading] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [genSummary, setGenSummary] = useState<string | null>(null)
+  // 来源要显性化：'ai' 实时生成 vs 'fallback' 内置模板兜底，用户需据此判断数据可信度
+  const [genSource, setGenSource] = useState<'ai' | 'fallback' | null>(null)
   const handleGenExample = async () => {
     setGenLoading(true)
     setGenError(null)
     setGenSummary(null)
+    setGenSource(null)
     try {
       const { skus: g, config: c, source, note, summary } = await generateExample()
       onChange(g)
       onConfigChange(c)
+      setGenSource(source)
       setGenSummary(summary)
       if (source === 'fallback' && note) {
         setGenError(note)
@@ -294,7 +298,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       />
 
       {/* AI 生成示例：状态提示（独立成行，避免大屏下挤进标题行） */}
-      <GenExampleNotice genSummary={genSummary} genError={genError} />
+      <GenExampleNotice source={genSource} genSummary={genSummary} genError={genError} />
 
       {/* AI 识别：扫描进度 / 确认修正 */}
       <AnimatePresence mode="wait">

@@ -158,14 +158,28 @@ async function runSmoke(browser, name, viewport) {
     const importBtn = await page.getByLabel('导入工作区备份').count()
     check(`[${name}] 备份导出/导入入口各一个`, exportBtn === 1 && importBtn === 1, `export=${exportBtn} import=${importBtn}`)
 
+    /* --- 首启引导（F7）：干净 storage 下必须是两条主路径 + 三步说明 --- */
+    const pathQuick = await page.getByRole('button', { name: /粘贴你的规格表/ }).count()
+    const pathGen = await page.getByRole('button', { name: /一键生成示例/ }).count()
+    const stepCount = await page.getByText(/录入候选|设定维度|生成报告/).count()
+    check(
+      `[${name}] 首启空状态给出两条主路径与三步说明`,
+      pathQuick === 1 && pathGen === 1 && stepCount >= 3,
+      `quick=${pathQuick} gen=${pathGen} steps=${stepCount}`,
+    )
+
     /* --- 主链路：生成示例 → 出报告 --- */
-    // 用 exact 精确匹配：空状态大卡片上还有个「AI 生成示例 先看看完整效果」，模糊匹配会撞车。
+    // 用 exact 精确匹配：空状态大卡片上还有个「一键生成示例 …」，模糊匹配会撞车。
     await page.getByRole('button', { name: 'AI 生成示例', exact: true }).click()
     // 只数 :visible —— 桌面表格行和移动端卡片行是两套 DOM，被 CSS 隐藏的那套不能算。
     const delButtons = page.locator('[aria-label="删除此行"]:visible')
     await delButtons.first().waitFor({ timeout: STEP_TIMEOUT_MS })
     const rowCount = await delButtons.count()
     check(`[${name}] 生成示例后出现多个规格行`, rowCount >= 3, `rows=${rowCount}`)
+
+    // F7：生成来源必须显性化，用户要知道这份示例是 AI 现生成还是内置模板兜底。
+    const srcBadge = await page.getByText(/AI 实时生成|内置示例/).count()
+    check(`[${name}] 生成来源已显性标注`, srcBadge >= 1, `badge=${srcBadge}`)
 
     // 同样用 exact：底部还有个「生成决策报告」的 CTA 会撞上 /报告/。
     const reportNav = page.getByRole('button', { name: '报告', exact: true })
