@@ -3,8 +3,9 @@ import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
   loadTheme, saveTheme, migrateV1ToV2,
-  loadWorkspace, saveWorkspace, newScenario,
+  loadWorkspace, newScenario,
   exportWorkspace, importWorkspace,
+  commitWorkspace, readStoredRev, subscribeWorkspaceChange,
   onPersistIssue, getPersistIssue, clearPersistIssues,
 } from './lib/store'
 import type { Scenario, Workspace, PersistIssue } from './lib/store'
@@ -57,6 +58,8 @@ export default function App() {
   const [persistIssue, setPersistIssue] = useState<PersistIssue | null>(() => getPersistIssue())
   /** 最近一次破坏性操作（删除清单 / 覆盖导入）的可回退槽；非空时显示撤销提示条 */
   const [undo, setUndo] = useState<UndoSlot | null>(null)
+  /** 非空表示其他标签页写过更新版本，本页可能是旧数据；提示用户是否载入 */
+  const [externalChange, setExternalChange] = useState(false)
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
@@ -66,7 +69,32 @@ export default function App() {
   // 这样挂载当次的写入失败才不会被漏掉。
   useEffect(() => onPersistIssue(setPersistIssue), [])
 
-  useEffect(() => saveWorkspace(workspace), [workspace])
+  // 其他标签页改了工作区（storage 事件 / BroadcastChannel）：只提示，不静默覆盖本页
+  useEffect(() => subscribeWorkspaceChange(() => setExternalChange(true)), [])
+
+  // 落盘走带版本号守卫的提交：若已落后于其他标签页则拒绝覆盖并提示，
+  // 而不是把对方整份改动盖掉（风险卡 D3）。提交成功后把本页 rev 对齐到落盘值，
+  // 内容未变的下一次提交会被跳过，因此不会自激成环。
+  useEffect(() => {
+    let cancelled = false
+    commitWorkspace(workspace).then((res) => {
+      if (cancelled) return
+      if (!res.ok) {
+        setExternalChange(true)
+        return
+      }
+      // 提交会把工作区规范化后落盘，这里把内存态对齐到规范化形态：
+      // 既让 rev 跟上落盘值，也确保"读回来的形态 === 内存形态"，避免同一份内容
+      // 因清洗补全（如 priceHistory 播种）被反复判定为"已变"而无谓写入。
+      setWorkspace((w) =>
+        w.rev === res.workspace.rev &&
+        JSON.stringify(w.scenarios) === JSON.stringify(res.workspace.scenarios)
+          ? w
+          : res.workspace,
+      )
+    })
+    return () => { cancelled = true }
+  }, [workspace])
 
   useEffect(() => {
     saveTheme(theme)
@@ -131,7 +159,7 @@ export default function App() {
 
   const createScenario = (name: string) => setWorkspace((w) => {
     const sc = newScenario(name)
-    return { scenarios: [...w.scenarios, sc], activeId: sc.id }
+    return { scenarios: [...w.scenarios, sc], activeId: sc.id, rev: w.rev }
   })
 
   // 改名也是一次改动，同样刷新 updatedAt，否则清单条上的"多久没动过"会失真
@@ -154,6 +182,14 @@ export default function App() {
     if (!undo) return
     setWorkspace((w) => applyUndo(w, undo))
     setUndo(null)
+  }
+
+  /** 载入其他标签页写入的最新版本：本页未同步的改动会被丢弃，撤销槽/待确认导入随之作废 */
+  const loadExternal = () => {
+    setWorkspace(loadWorkspace())
+    setUndo(null)
+    setPendingImport(null)
+    setExternalChange(false)
   }
 
   /* ---------- 工作区备份 / 还原 ---------- */
@@ -185,7 +221,8 @@ export default function App() {
     if (!pendingImport) return
     // 覆盖导入会整份换掉工作区，先把旧的收进撤销槽
     setUndo(captureImport(workspace, pendingImport))
-    setWorkspace(pendingImport)
+    // 覆盖导入是用户显式动作：版本号对齐到当前落盘值，避免被"过期"守卫误伤
+    setWorkspace({ ...pendingImport, rev: readStoredRev() })
     setPendingImport(null)
   }
 
@@ -206,7 +243,7 @@ export default function App() {
     const d = new Date()
     const name = `分享导入 ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const sc = newScenario(name, shared.skus, shared.config)
-    setWorkspace((w) => ({ scenarios: [...w.scenarios, sc], activeId: sc.id }))
+    setWorkspace((w) => ({ scenarios: [...w.scenarios, sc], activeId: sc.id, rev: w.rev }))
     exitShared()
     setPage('workbench')
   }
@@ -351,6 +388,34 @@ export default function App() {
                 onClick={() => setUndo(null)}
                 className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-amber-500 hover:border-amber-400/50 transition-all"
                 aria-label="关闭撤销提示"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 其他标签页改过工作区：本页可能是旧版本，让用户选择载入而不是静默覆盖 */}
+        {externalChange && (
+          <div
+            role="status"
+            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-amber-400/40"
+          >
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+              <AlertIcon />
+              <span>另一标签页已修改，载入？载入会丢弃本页尚未同步的改动。</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={loadExternal}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:opacity-90 transition-opacity"
+              >
+                载入
+              </button>
+              <button
+                onClick={() => setExternalChange(false)}
+                className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-amber-500 hover:border-amber-400/50 transition-all"
+                aria-label="关闭外部修改提示"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

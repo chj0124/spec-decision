@@ -118,6 +118,8 @@ export interface Scenario {
 export interface Workspace {
   scenarios: Scenario[]
   activeId: string
+  /** 版本号：每次落盘 +1。多标签页靠它判断"我这份是否已落后于别人写的" */
+  rev: number
 }
 
 /** 默认决策配置：仅价格维度 */
@@ -242,7 +244,7 @@ function buildMigratedWorkspace(): Workspace {
   )
   // 过一遍清洗：顺带把老数据的价格历史播种补上（见 sanitizeSkus）
   const scenarios = sanitizeScenarios([scenario])
-  return { scenarios, activeId: scenarios[0].id }
+  return { scenarios, activeId: scenarios[0].id, rev: 0 }
 }
 
 /** 首次升级到多清单：把旧的单份 skus/config 包成「我的清单」并落盘 */
@@ -327,7 +329,8 @@ function readWorkspace(): WorkspaceRead {
   const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
     ? parsed.activeId
     : scenarios[0].id
-  return { status: 'ok', workspace: { scenarios, activeId } }
+  const rev = typeof parsed.rev === 'number' ? parsed.rev : 0
+  return { status: 'ok', workspace: { scenarios, activeId, rev } }
 }
 
 /**
@@ -345,6 +348,193 @@ export function loadWorkspace(): Workspace {
 
 export function saveWorkspace(ws: Workspace) {
   writeJson(SCENARIOS_KEY, ws)
+}
+
+/* ---------- 多标签页一致性（B1） ----------
+ * 两个标签页同时开着同一份清单时，"后写的整份覆盖"会让先写的一侧静默丢改动（风险卡 D3）。
+ * 这里做三件事：
+ *  1. 落盘带上单调递增的 rev 版本号；
+ *  2. 写入前比对落盘 rev：落后（别人写得更新）则拒绝覆盖，交回调用方提示用户；
+ *  3. 写入后经 BroadcastChannel 广播新 rev，同时监听 storage 事件，
+ *     让其他标签页知道"外部有更新"，由用户决定是否载入。
+ */
+
+const WORKSPACE_CHANNEL = 'spec-decision:ws'
+const WORKSPACE_LOCK = 'spec-decision:ws'
+
+/** 本标签页的随机标识：用于过滤 BroadcastChannel 的自身回环 */
+let tabId: string | null = null
+function selfId(): string {
+  if (!tabId) tabId = uid()
+  return tabId
+}
+
+/** 活跃的变更频道；提交成功后向它们广播新版本号 */
+const changeChannels = new Set<BroadcastChannel>()
+
+/** 只描述我们用到的 Web Locks 能力，避免 lib.dom 的泛型重载把返回值推成 T | Promise<T> */
+interface WebLocks {
+  request<R>(name: string, cb: () => R | Promise<R>): Promise<R>
+}
+
+/** 把并发写串行化：优先用 Web Locks，缺失时回退到模块内的 Promise 链 */
+let writeChain: Promise<unknown> = Promise.resolve()
+function withWriteLock<T>(fn: () => T | Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined'
+    ? (navigator as unknown as { locks?: WebLocks }).locks
+    : undefined
+  if (locks) {
+    return locks.request(WORKSPACE_LOCK, fn)
+  }
+  const next = writeChain.then(fn, fn)
+  writeChain = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  return next
+}
+
+/** 当前落盘的版本号；无数据 / 不可解析时为 0 */
+export function readStoredRev(): number {
+  try {
+    const raw = localStorage.getItem(SCENARIOS_KEY)
+    if (!raw) return 0
+    const parsed = JSON.parse(raw) as Partial<Workspace>
+    return typeof parsed.rev === 'number' ? parsed.rev : 0
+  } catch {
+    return 0
+  }
+}
+
+export type CommitResult =
+  | { ok: true; rev: number; skipped: boolean; workspace: Workspace }
+  | { ok: false; reason: 'stale'; rev: number }
+
+/**
+ * 落盘对象的内部形态：在 Workspace 之外多记一个写入者标识。
+ * 它不进入 Workspace 类型、不进入导出备份，只在冲突判定时用来区分
+ * 「这个 rev 是本页自己写的」与「被其他标签页抢先推高」。
+ * 缺省（老数据 / 未带标识的写入）按"他人所写"保守处理。
+ */
+interface StoredWorkspace extends Partial<Workspace> {
+  by?: string
+}
+
+/** 解析落盘对象，取出版本号与写入者；不可解析时按"无版本号、无写入者"降级 */
+function parseStored(raw: string): { rev: number; by?: string } {
+  try {
+    const parsed = JSON.parse(raw) as StoredWorkspace
+    return { rev: typeof parsed.rev === 'number' ? parsed.rev : 0, by: parsed.by }
+  } catch {
+    return { rev: 0 }
+  }
+}
+
+/**
+ * 提交工作区：带版本号守卫的落盘。
+ *  - 内容（清单 + 激活项）与落盘一致 → 不重写，只把 rev 跟上落盘值
+ *    （否则 rev 回写会触发一次内容相同的提交，把版本号无谓地越推越高）
+ *  - 落盘 rev 更新，且**不是本页自己写的** → 拒绝覆盖（stale），回传对方版本号
+ *  - 正常 → 写 rev + 1 并向其他标签页广播
+ *
+ * 两个关键不变量：
+ *  1. **落盘一律写"规范化"形态**（先过一遍 sanitizeScenarios）。清洗会补全缺省字段
+ *     （典型如按当前价播种 priceHistory），若直接把内存态写盘，读回来又会被清洗成
+ *     另一种形态，"内容未变"的判定永远为假 —— 别的标签页一挂载就无谓写入、推高 rev，
+ *     本页正常改动随即被判"过期"而拒写（风险卡 D3 的连环误伤）。这里以规范化形态落盘，
+ *     并把该形态交回调用方，让内存态与落盘态保持同形。
+ *  2. **同一标签页的连续提交不算过期**。内存里的 ws.rev 只在提交成功后才跟上落盘值，
+ *     在此之前若用户又改了一次（两次 render 各触发一次提交），第二次提交看到的仍是旧
+ *     ws.rev；若只看"落盘 rev 更大"就判过期，本页自己的改动会把自己挡住并弹出误报。
+ *     因此靠落盘里的写入者标识区分：是自己写的就继续往下写，是别人写的才拒写。
+ */
+export function commitWorkspace(ws: Workspace): Promise<CommitResult> {
+  return withWriteLock<CommitResult>(() => {
+    let storedRaw: string | null = null
+    try {
+      storedRaw = localStorage.getItem(SCENARIOS_KEY)
+    } catch {
+      // 存储禁用：交由 writeJson 走异常上报路径，这里按"无数据"继续
+      storedRaw = null
+    }
+    const stored = storedRaw ? parseStored(storedRaw) : { rev: 0 }
+    const storedRev = stored.rev
+
+    const scenarios = sanitizeScenarios(ws.scenarios)
+
+    if (storedRaw && sameContent(storedRaw, scenarios, ws.activeId)) {
+      return {
+        ok: true,
+        rev: storedRev,
+        skipped: true,
+        workspace: { scenarios, activeId: ws.activeId, rev: storedRev },
+      }
+    }
+
+    const authoredBySelf = stored.by !== undefined && stored.by === selfId()
+    if (storedRaw && storedRev > ws.rev && !authoredBySelf) {
+      return { ok: false, reason: 'stale', rev: storedRev }
+    }
+
+    const rev = storedRev + 1
+    const next: Workspace = { scenarios, activeId: ws.activeId, rev }
+    if (writeJson(SCENARIOS_KEY, { ...next, by: selfId() })) broadcastChange(rev)
+    return { ok: true, rev, skipped: false, workspace: next }
+  })
+}
+
+/** 内容比对（忽略 rev）：以"规范化后的清单数组 + 激活项"为准 */
+function sameContent(raw: string, scenarios: Scenario[], activeId: string): boolean {
+  try {
+    const stored = JSON.parse(raw) as Partial<Workspace>
+    return (
+      stored.activeId === activeId &&
+      JSON.stringify(stored.scenarios ?? null) === JSON.stringify(scenarios)
+    )
+  } catch {
+    return false
+  }
+}
+
+function broadcastChange(rev: number) {
+  const from = selfId()
+  changeChannels.forEach((ch) => ch.postMessage({ rev, from }))
+}
+
+/**
+ * 订阅"其他标签页改动了工作区"：
+ *  - storage 事件：主数据键变更（key 为 SCENARIOS_KEY；清空时为 null）
+ *  - BroadcastChannel：忽略自身回环，接收其他标签页的广播
+ * 返回取消订阅函数：解除监听并关闭频道。
+ */
+export function subscribeWorkspaceChange(fn: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === SCENARIOS_KEY || e.key === null) fn()
+  }
+  if (typeof window !== 'undefined') window.addEventListener('storage', onStorage)
+
+  let channel: BroadcastChannel | null = null
+  let onMessage: ((e: MessageEvent) => void) | null = null
+  if (typeof BroadcastChannel !== 'undefined') {
+    channel = new BroadcastChannel(WORKSPACE_CHANNEL)
+    const from = selfId()
+    onMessage = (e: MessageEvent) => {
+      const data = e.data as { rev?: unknown; from?: unknown } | null
+      if (data && data.from === from) return // 自身回环：忽略
+      fn()
+    }
+    channel.addEventListener('message', onMessage)
+    changeChannels.add(channel)
+  }
+
+  return () => {
+    if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage)
+    if (channel) {
+      if (onMessage) channel.removeEventListener('message', onMessage)
+      changeChannels.delete(channel)
+      channel.close()
+    }
+  }
 }
 
 /* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */
@@ -365,7 +555,7 @@ export function exportWorkspace(ws: Workspace): string {
     app: BACKUP_APP,
     v: BACKUP_VERSION,
     exportedAt: Date.now(),
-    workspace: { scenarios: ws.scenarios, activeId: ws.activeId },
+    workspace: { scenarios: ws.scenarios, activeId: ws.activeId, rev: ws.rev },
   }
   return JSON.stringify(backup, null, 2)
 }
@@ -381,7 +571,8 @@ export function importWorkspace(text: string): Workspace | null {
     const activeId = raw?.activeId && scenarios.some((s) => s.id === raw.activeId)
       ? raw.activeId
       : scenarios[0].id
-    return { scenarios, activeId }
+    const rev = typeof raw?.rev === 'number' ? raw.rev : 0
+    return { scenarios, activeId, rev }
   } catch {
     return null
   }

@@ -23,7 +23,7 @@ export function removeScenario(w: Workspace, id: string): Workspace {
   if (w.scenarios.length <= 1) return w
   const scenarios = w.scenarios.filter((s) => s.id !== id)
   if (scenarios.length === w.scenarios.length) return w
-  return { scenarios, activeId: w.activeId === id ? scenarios[0].id : w.activeId }
+  return { scenarios, activeId: w.activeId === id ? scenarios[0].id : w.activeId, rev: w.rev }
 }
 
 /** 记录一次"删除清单"；必须在真正删除之前调用，否则拿不到原位置与清单内容 */
@@ -58,7 +58,7 @@ export function restoreScenario(w: Workspace, slot: DeleteSlot): Workspace {
   const scenarios = [...w.scenarios]
   scenarios.splice(Math.min(slot.index, scenarios.length), 0, slot.scenario)
   const activeId = slot.activeId === slot.scenario.id ? slot.scenario.id : w.activeId
-  return { scenarios, activeId }
+  return { scenarios, activeId, rev: w.rev }
 }
 
 /** 把撤销槽写回工作区 */

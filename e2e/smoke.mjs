@@ -229,6 +229,101 @@ async function runSmoke(browser, name, viewport) {
   }
 }
 
+/**
+ * 双标签页一致性（B1）：同一 context 下开两个 page、共享 localStorage / BroadcastChannel。
+ * 覆盖任务验收「双标签页各改一次、来回切换后两边的改动都还在；并发写不会静默丢失」。
+ *
+ * 叙事：A 改一次 → B 必须检出外部变更并提示（而非静默把 A 的改动盖掉）→
+ *       B 载入后再改一次 → A 检出并载入 → 两边的改动都在。
+ * 这里只用桌面视口跑一遍：它验证的是数据协议，与响应式无关。
+ */
+async function runMultiTab(browser) {
+  const name = '双标签页'
+  const context = await browser.newContext({ viewport: VIEWPORTS.desktop })
+  const pageA = await context.newPage()
+  const pageB = await context.newPage()
+
+  const pageErrors = []
+  for (const p of [pageA, pageB]) p.on('pageerror', (e) => pageErrors.push(e.message))
+
+  // 断言失败时返回 false 而不是抛出：让每条 check 都能独立报出结果
+  const appeared = async (locator, timeout = STEP_TIMEOUT_MS) => {
+    try {
+      await locator.first().waitFor({ timeout })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const rename = async (page, next) => {
+    await page.getByLabel('重命名清单').click()
+    // 重命名态下页面只有这一个 maxLength=24 的输入框（新建输入框此时不渲染）
+    const input = page.locator('input[maxLength="24"]')
+    await input.fill(next)
+    await input.press('Enter')
+  }
+
+  try {
+    // A 先进入并生成示例数据
+    await pageA.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    await pageA.getByRole('button', { name: 'AI 生成示例', exact: true }).click()
+    await pageA.locator('[aria-label="删除此行"]:visible').first().waitFor({ timeout: STEP_TIMEOUT_MS })
+    await pageA.waitForTimeout(300)
+
+    // B 随后打开：与 A 共用同一份本地数据，此刻尚无外部改动
+    await pageB.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    check(`[${name}] 第二个标签页就绪`, await appeared(pageB.getByRole('button', { name: '新建', exact: true })))
+    await pageA.waitForTimeout(300)
+
+    // ① A 改一次
+    await rename(pageA, 'A侧改动')
+    check(`[${name}] A 的改动已生效`, await appeared(pageA.getByRole('button', { name: 'A侧改动', exact: true })))
+    await pageA.waitForTimeout(300)
+
+    // ② B 必须检出外部变更并提示，而不是静默覆盖
+    const bannerHint = '另一标签页已修改，载入？'
+    check(`[${name}] B 检出外部变更并提示`, await appeared(pageB.getByText(bannerHint)))
+
+    // ③ B 载入最新版本后再改一次
+    await pageB.getByRole('button', { name: '载入', exact: true }).click()
+    check(`[${name}] B 载入后同步到 A 的改动`, await appeared(pageB.getByRole('button', { name: 'A侧改动', exact: true })))
+
+    await pageB.getByRole('button', { name: '新建', exact: true }).click()
+    const createInput = pageB.locator('input[placeholder="新清单名称"]')
+    await createInput.fill('B侧新增')
+    await createInput.press('Enter')
+    check(`[${name}] B 的改动已生效`, await appeared(pageB.getByRole('button', { name: 'B侧新增', exact: true })))
+
+    // ④ A 来回切回：应检出 B 的写入并载入
+    check(`[${name}] A 检出 B 的外部变更并提示`, await appeared(pageA.getByText(bannerHint)))
+    await pageA.getByRole('button', { name: '载入', exact: true }).click()
+
+    // ⑤ 两边改动必须都还在：既没被静默覆盖，也没在切换中丢掉
+    const keptA = (await pageA.getByRole('button', { name: 'A侧改动', exact: true }).count()) === 1
+    const keptB = (await pageA.getByRole('button', { name: 'B侧新增', exact: true }).count()) === 1
+    check(`[${name}] 来回切换后两边改动都在（A 视角）`, keptA && keptB, `A侧改动=${keptA} B侧新增=${keptB}`)
+
+    // 落盘内容才是最终事实：直接核对本地 JSON
+    const stored = await pageA.evaluate((key) => {
+      const raw = localStorage.getItem(key)
+      return raw ? JSON.parse(raw) : null
+    }, 'spec-decision:scenarios')
+    const names = (stored?.scenarios ?? []).map((s) => s.name)
+    check(
+      `[${name}] 落盘内容同时含两边改动`,
+      names.includes('A侧改动') && names.includes('B侧新增'),
+      names.join(' / '),
+    )
+
+    check(`[${name}] 无未捕获异常`, pageErrors.length === 0, pageErrors.join(' ; '))
+  } catch (e) {
+    check(`[${name}] 用例执行未抛错`, false, e?.message ?? String(e))
+  } finally {
+    await context.close()
+  }
+}
+
 /* ---------------- 入口 ---------------- */
 
 async function main() {
@@ -253,6 +348,8 @@ async function main() {
       for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         await runSmoke(browser, name, viewport)
       }
+      // 双标签页一致性用例与视口无关，单独跑一遍
+      await runMultiTab(browser)
     } finally {
       await browser.close()
     }
