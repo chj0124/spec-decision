@@ -10,6 +10,10 @@
  *  - decide   决策主入口
  *
  * 所有调用方仍以 `from './engine'` / `'../lib/engine'` 引用，拆分对调用方完全透明。
+ *
+ * ⚠️ 硬约束：engine 是**纯计算层**，本目录内禁止 import '../ai' / '../store'，
+ * 禁止任何网络请求、localStorage 读写等 IO 副作用。含 IO 的能力（如 aiNormalizeUnit）
+ * 一律放在 src/lib/ 下、由调用方显式引入，不由此 barrel 对外暴露。
  */
 export { uid, fmt, isStale, STALE_DAYS, displayUnit, displayQuantity, displayUnitPrice, minOf, maxOf } from './util'
 
@@ -17,7 +21,6 @@ export {
   UNIT_GROUPS,
   normalizeUnit,
   isKnownUnit,
-  aiNormalizeUnit,
   unitMixWarning,
 } from './units'
 
