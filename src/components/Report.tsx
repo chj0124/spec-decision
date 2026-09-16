@@ -566,7 +566,8 @@ function MainVisual({
   return (
     <div ref={boxRef} style={{ height: chartHeight }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warnRightRoom, bottom: 24, left: 4 }} barCategoryGap={12}>
+        {/* 单价图顶上加高：平均线标签 position:'top' 画在绘图区上方，留白不够会被 SVG 边界裁掉 */}
+        <BarChart layout="vertical" data={data} margin={{ top: kind === 'price' ? 26 : 8, right: warnRightRoom, bottom: 24, left: 4 }} barCategoryGap={12}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
           <XAxis
             type="number"
