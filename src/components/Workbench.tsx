@@ -9,6 +9,7 @@ import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
 import { deriveFlavorColorMap, deriveDimColorMaps, deriveDimHasGroup, skusHaveFlavor } from '../lib/view-model'
+import { palette } from '../lib/palette'
 import RecognizeReview from './RecognizeReview'
 import WeightPie from './WeightPie'
 import {
@@ -229,9 +230,6 @@ function PriceAgeBadge({ history, className = '' }: { history?: PricePoint[]; cl
   )
 }
 
-// 权重饼图调色板（与图表主题一致的靛蓝主色系）
-const PIE_COLORS = ['#4f46e5', '#f59e0b', '#10b981', '#a855f7', '#ef4444', '#0ea5e9', '#ec4899']
-
 const PARAM_TYPE_LABELS: Record<ParamType, string> = {
   'higher-better': '越大越好',
   'lower-better': '越小越好',
@@ -253,24 +251,6 @@ const WEIGHT_TIERS = [
 
 /** 数值型维度才需要单位；boolean/text 用不到 */
 const isNumericType = (t: ParamType) => t === 'higher-better' || t === 'lower-better'
-
-/** 第一分组维度（口味/颜色/型号）行底色调色板 */
-const FLAVOR_COLORS = [
-  'bg-sky-100/60 dark:bg-sky-900/20',
-  'bg-amber-100/60 dark:bg-amber-900/20',
-  'bg-emerald-100/60 dark:bg-emerald-900/20',
-  'bg-violet-100/60 dark:bg-violet-900/20',
-  'bg-rose-100/60 dark:bg-rose-900/20',
-  'bg-cyan-100/60 dark:bg-cyan-900/20',
-  'bg-orange-100/60 dark:bg-orange-900/20',
-  'bg-teal-100/60 dark:bg-teal-900/20',
-]
-
-/** 参数维度列分组色条颜色（inline style） */
-const GROUP_BAR_COLORS = [
-  '#0ea5e9', '#f59e0b', '#10b981', '#a855f7',
-  '#f43f5e', '#06b6d4', '#f97316', '#14b8a6',
-]
 
 export default function Workbench({ skus, onChange, onGenerate, config, onConfigChange }: Props) {
   const [scanning, setScanning] = useState(false)
@@ -437,11 +417,11 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
 
   // 权重饼图数据：价格 + 所有维度
   const pieData = [
-    { name: '价格', value: Math.max(0, config.priceWeight), color: PIE_COLORS[0] },
+    { name: '价格', value: Math.max(0, config.priceWeight), color: palette.pie[0] },
     ...config.dims.map((d, i) => ({
       name: d.label,
       value: Math.max(0, d.weight),
-      color: PIE_COLORS[(i + 1) % PIE_COLORS.length],
+      color: palette.pie[(i + 1) % palette.pie.length],
     })),
   ].filter((d) => d.value > 0)
 
@@ -625,8 +605,8 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
   // 分组上色：第一维度（口味/颜色/型号）用行底色，参数维度列用左侧色条
-  const flavorColorMap = deriveFlavorColorMap(skus, FLAVOR_COLORS)
-  const dimColorMaps = deriveDimColorMaps(skus, config.dims, GROUP_BAR_COLORS)
+  const flavorColorMap = deriveFlavorColorMap(skus, palette.flavor)
+  const dimColorMaps = deriveDimColorMaps(skus, config.dims, palette.groupBar)
   const dimHasGroup = deriveDimHasGroup(dimColorMaps)
   const hasAnyFlavor = skusHaveFlavor(skus)
 

@@ -8,6 +8,7 @@ import {
   deriveSpecRows, deriveVisualAnchorId, deriveOneLiner,
 } from '../lib/view-model'
 import type { FullGroupBy, SpecRow } from '../lib/view-model'
+import { palette } from '../lib/palette'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
@@ -115,18 +116,6 @@ async function writeClipboard(text: string): Promise<void> {
   try { document.execCommand('copy') } catch { /* 尽力而为 */ }
   document.body.removeChild(ta)
 }
-
-/** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致（亮 / 暗双模式） */
-const FLAVOR_COLORS = [
-  'bg-sky-100/60 dark:bg-sky-900/20',
-  'bg-amber-100/60 dark:bg-amber-900/20',
-  'bg-emerald-100/60 dark:bg-emerald-900/20',
-  'bg-violet-100/60 dark:bg-violet-900/20',
-  'bg-rose-100/60 dark:bg-rose-900/20',
-  'bg-cyan-100/60 dark:bg-cyan-900/20',
-  'bg-orange-100/60 dark:bg-orange-900/20',
-  'bg-teal-100/60 dark:bg-teal-900/20',
-]
 
 /* ============ 主视觉：围绕「每单位单价」这一个标尺的四种看法 ============ */
 
@@ -725,7 +714,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     })
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
   // 口味分组底色：按 flavor 值稳定映射到调色板
-  const flavorColorMap = deriveFlavorColorMap(items, FLAVOR_COLORS)
+  const flavorColorMap = deriveFlavorColorMap(items, palette.flavor)
   // 分组维度候选：过滤掉无区分意义的（所有 SKU 值相同 / 每组仅1项）
   const groupOptions = deriveGroupOptions(items, flavorLabel)
 
