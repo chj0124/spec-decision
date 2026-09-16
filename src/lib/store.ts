@@ -540,6 +540,178 @@ export function subscribeWorkspaceChange(fn: () => void): () => void {
   }
 }
 
+/* ---------- 自动草稿（F6）：本标签页私有的崩溃安全网 ----------
+ * 共享数据靠 commitWorkspace 的 rev 守卫防丢（B1），但它有两条防不住的缝：
+ *  1. 提交被判过期而拒写 —— 本页改动没进共享数据，关掉页面就永久丢了；
+ *  2. 崩溃 / 关页发生在节流窗口内 —— 最后几次编辑还没来得及落盘。
+ * 草稿就是给这两条缝兜底：一份本标签页私有、不进 rev 竞争的副本。
+ * 它只在"确实没同步上"时才在重开时打扰用户 —— 内容与落盘一致就静默清掉。
+ */
+
+/** 草稿键：与主数据键分离，永不参与 rev 竞争 */
+export const DRAFT_KEY = 'spec-decision:draft'
+
+/** 草稿落盘节流窗口：编辑中最多每 2s 落一次，窗口末尾再补一次 */
+export const DRAFT_INTERVAL_MS = 2000
+
+export interface DraftRecord {
+  workspace: Workspace
+  /** 草稿基于的落盘版本号（当时本页的 rev），提示条里用来交代它基于哪一版 */
+  baseRev: number
+  /** 写入时间 */
+  at: number
+}
+
+/**
+ * 读草稿：不存在 / 不可解析 / 无可用清单时返回 null。
+ * 脏草稿按"没有草稿"降级 —— 草稿只值一次恢复机会，不值得为它把首屏带崩。
+ */
+export function readDraft(): DraftRecord | null {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(DRAFT_KEY)
+  } catch {
+    return null
+  }
+  if (!raw) return null
+
+  let parsed: Partial<DraftRecord>
+  try {
+    parsed = JSON.parse(raw) as Partial<DraftRecord>
+  } catch {
+    return null
+  }
+
+  const rawWs = parsed.workspace as Partial<Workspace> | undefined
+  const scenarios = sanitizeScenarios(rawWs?.scenarios)
+  if (scenarios.length === 0) return null
+
+  const activeId = rawWs?.activeId && scenarios.some((s) => s.id === rawWs.activeId)
+    ? rawWs.activeId
+    : scenarios[0].id
+  const rev = typeof rawWs?.rev === 'number' ? rawWs.rev : 0
+  return {
+    workspace: { scenarios, activeId, rev },
+    baseRev: typeof parsed.baseRev === 'number' ? parsed.baseRev : rev,
+    at: typeof parsed.at === 'number' ? parsed.at : 0,
+  }
+}
+
+/**
+ * 写草稿：走 writeJson，配额超限 / 存储被禁用时同样进持久化异常上报，而不是静默丢失。
+ * 读草稿时会过与主数据同一套清洗，所以"草稿是否已同步"的比对是对齐的。
+ */
+export function writeDraft(ws: Workspace, baseRev: number): boolean {
+  return writeJson(DRAFT_KEY, { workspace: ws, baseRev, at: Date.now() })
+}
+
+/** 清草稿：用户丢弃草稿 / 载入外部变更 / 覆盖导入后调用 */
+export function clearDraft() {
+  try {
+    localStorage.removeItem(DRAFT_KEY)
+    resolveIssue(DRAFT_KEY)
+  } catch {
+    /* 存储被禁用：本来就没有草稿可清，保留既有告警 */
+  }
+}
+
+/**
+ * 内容指纹：供"草稿是否与落盘一致"的比对使用。
+ * 必须剥离清洗阶段新造的易变时间戳 —— 清单 updatedAt 与价格历史的时间点：
+ * 它们只记录"何时被触碰 / 何时播种"，不构成用户可见的内容差异。
+ * 否则同一份内容的两个快照（如"生成示例"先后两次 patch 各推一次 updatedAt，
+ * 价格历史又按 updatedAt 播种）会被误判为"未同步"：重开时无端弹恢复条，
+ * 且非空的草稿态会把本页之后的草稿写入一并挡掉（D3 兜底失效）。
+ */
+function contentKey(ws: Workspace): string {
+  return JSON.stringify({
+    activeId: ws.activeId,
+    scenarios: ws.scenarios.map((s) => ({
+      ...s,
+      updatedAt: 0,
+      skus: s.skus.map((k) => ({ ...k, priceHistory: (k.priceHistory ?? []).map((p) => p.price) })),
+    })),
+  })
+}
+
+/** 两份工作区是否同内容（忽略 rev 与"触碰时间"，它们只反映落盘次序 / 何时被动过） */
+function sameWorkspace(a: Workspace, b: Workspace): boolean {
+  return contentKey(a) === contentKey(b)
+}
+
+/**
+ * 重开时可恢复的草稿：
+ *  - 无草稿 → null
+ *  - 草稿内容与已落盘一致 → 上次改动其实已经落盘，没有可恢复的东西；
+ *    顺手清掉，免得此后每次重开都弹一个没意义的提示
+ *  - 两者不同（提交被拒 / 关页前未落盘）→ 返回草稿，交给用户决定
+ */
+export function loadRecoverableDraft(): DraftRecord | null {
+  const draft = readDraft()
+  if (!draft) return null
+
+  const read = readWorkspace()
+  if (read.status === 'ok' && sameWorkspace(draft.workspace, read.workspace)) {
+    clearDraft()
+    return null
+  }
+  return draft
+}
+
+export interface DraftScheduler {
+  /** 安排一次草稿写入：前沿立即写，窗口内合并，窗口结束补写最后一次 */
+  schedule(ws: Workspace, baseRev: number): void
+  /** 立即补写待写内容；没有待写内容时是空操作（pagehide / 页面隐藏时用） */
+  flush(): void
+  /** 丢弃待写内容并停掉定时器（组件卸载时用） */
+  cancel(): void
+}
+
+/**
+ * 草稿节流写入器：编辑是高频动作，逐次写盘既慢又容易把 localStorage 写满。
+ * 采用"前沿 + 后沿"节流 —— 第一次改动立即落盘（窗口内崩溃也不至于全丢），
+ * 窗口内后续改动合并成一个待写项，窗口结束时补写最后一次。
+ */
+export function createDraftScheduler(intervalMs: number = DRAFT_INTERVAL_MS): DraftScheduler {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: { ws: Workspace; baseRev: number } | null = null
+  let lastWriteAt = 0
+
+  const clearTimer = () => {
+    if (timer === null) return
+    clearTimeout(timer)
+    timer = null
+  }
+
+  const writeNow = () => {
+    clearTimer()
+    if (!pending) return
+    const { ws, baseRev } = pending
+    pending = null
+    writeDraft(ws, baseRev)
+    // 成败都推进窗口：失败已有异常上报，不该退化成"每次改动都重试"的写风暴
+    lastWriteAt = Date.now()
+  }
+
+  return {
+    schedule(ws, baseRev) {
+      pending = { ws, baseRev }
+      const elapsed = Date.now() - lastWriteAt
+      if (elapsed >= intervalMs) {
+        writeNow()
+        return
+      }
+      if (timer === null) timer = setTimeout(writeNow, intervalMs - elapsed)
+    },
+    flush: writeNow,
+    cancel() {
+      clearTimer()
+      pending = null
+      lastWriteAt = 0
+    },
+  }
+}
+
 /* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */
 
 const BACKUP_APP = 'spec-decision'

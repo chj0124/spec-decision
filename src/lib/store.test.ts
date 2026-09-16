@@ -3,6 +3,7 @@ import {
   loadWorkspace, exportWorkspace, importWorkspace, saveWorkspace, saveSkus, saveTheme,
   loadTheme, onPersistIssue, getPersistIssue, clearPersistIssues,
   commitWorkspace, readStoredRev, subscribeWorkspaceChange,
+  DRAFT_KEY, readDraft, writeDraft, clearDraft, loadRecoverableDraft, createDraftScheduler,
 } from './store'
 import type { PersistIssue, Scenario, Workspace } from './store'
 import type { PricePoint, Sku } from './types'
@@ -520,5 +521,227 @@ describe('多标签页一致性（B1）', () => {
     win.emit('storage', { key: SCENARIOS_KEY })
     instances[0].receive({ rev: 1, from: 'another-tab' })
     expect(calls).toBe(0)
+  })
+})
+
+/* ---------- 自动草稿（F6）：崩溃 / 关闭后的恢复安全网 ----------
+ * 草稿是本标签页私有的一份副本（不进 rev 竞争、不写主数据键）：
+ *  - 提交成功时它等于落盘内容，重开时判定为"已同步"，不打扰用户；
+ *  - 提交被拒（过期）/ 关页前没来得及落盘时，它是改动唯一的落点，重开可恢复。
+ */
+
+describe('自动草稿（F6）', () => {
+  const sc = (name: string): Scenario => ({
+    id: name,
+    name,
+    skus: [],
+    config: { dims: [], priceWeight: 50, preference: 'value' },
+    updatedAt: 1,
+  })
+  const wsOf = (rev: number, ...names: string[]): Workspace => ({
+    scenarios: names.map(sc),
+    activeId: names[0] ?? '',
+    rev,
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('readDraft：无草稿 / 脏草稿都返回 null，不抛不崩', () => {
+    expect(readDraft()).toBeNull()
+
+    localStorage.setItem(DRAFT_KEY, '{ 这不是合法 JSON')
+    expect(readDraft()).toBeNull()
+
+    // 结构不可用（没有可用清单）同样按"无草稿"降级
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ workspace: { scenarios: [] }, baseRev: 1 }))
+    expect(readDraft()).toBeNull()
+  })
+
+  it('写读往返：草稿带着工作区、基于版本号与写入时间', () => {
+    expect(writeDraft(wsOf(3, '进行中'), 3)).toBe(true)
+
+    const draft = readDraft()
+    expect(draft?.workspace.scenarios[0].name).toBe('进行中')
+    expect(draft?.workspace.activeId).toBe('进行中')
+    expect(draft?.baseRev).toBe(3)
+    expect(draft?.at).toBeGreaterThan(0)
+  })
+
+  it('写草稿不参与版本号竞争：不写主数据键、不推高 rev', async () => {
+    await commitWorkspace(wsOf(0, '已落盘'))
+
+    writeDraft(wsOf(0, '草稿内容'), 1)
+
+    // 草稿必须落在独立键上，且主数据的名字与版本号纹丝不动
+    expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull()
+    expect(readStoredRev()).toBe(1)
+    expect(JSON.parse(localStorage.getItem(SCENARIOS_KEY) as string).scenarios[0].name).toBe('已落盘')
+  })
+
+  it('草稿写入失败上报持久化异常，且不影响已落盘数据', () => {
+    vi.stubGlobal('localStorage', flakyStorage((k) => (k === DRAFT_KEY ? quotaErr() : null)))
+    seed([sku({ name: '已提交' })])
+
+    expect(writeDraft(wsOf(0, '草稿'), 0)).toBe(false)
+    expect(getPersistIssue()?.key).toBe(DRAFT_KEY)
+    expect(loadWorkspace().scenarios[0].skus[0].name).toBe('已提交')
+  })
+
+  it('clearDraft 移除草稿键，之后读不到', () => {
+    writeDraft(wsOf(0, 'a'), 0)
+    expect(readDraft()).not.toBeNull()
+
+    clearDraft()
+
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+    expect(readDraft()).toBeNull()
+  })
+
+  it('可恢复判定：草稿与已落盘内容不同才算数', () => {
+    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(wsOf(1, '已落盘')))
+    writeDraft(wsOf(1, '还没落盘'), 1)
+
+    const draft = loadRecoverableDraft()
+
+    expect(draft?.workspace.scenarios[0].name).toBe('还没落盘')
+    expect(draft?.baseRev).toBe(1)
+    expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull()
+  })
+
+  it('草稿与落盘内容相同：不算可恢复，并顺手清掉以免每次重开都弹提示', () => {
+    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(wsOf(1, 'a')))
+    writeDraft(wsOf(1, 'a'), 1)
+
+    expect(loadRecoverableDraft()).toBeNull()
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+  })
+
+  // 回归守卫（F6）：「AI 生成示例」会先后两次 patch（skus 后 config），各推一次 updatedAt，
+  // 价格历史又按 updatedAt 播种 —— 同一份内容因此出现两个时间戳不同的快照。
+  // 若把它们当"内容不同"，重开时每次都会无端弹恢复条，还会挡住本页后续的草稿写入。
+  it('回归守卫：仅触碰时间不同（内容一致）不算可恢复，静默清掉', () => {
+    const withSku = (updatedAt: number): Scenario => ({
+      ...sc('默认清单'),
+      skus: [sku({ id: 'k1', price: 292.17 })],
+      updatedAt,
+    })
+    localStorage.setItem(
+      SCENARIOS_KEY,
+      JSON.stringify({ scenarios: [withSku(2000)], activeId: '默认清单', rev: 2 }),
+    )
+    writeDraft({ scenarios: [withSku(1000)], activeId: '默认清单', rev: 0 }, 0)
+
+    expect(loadRecoverableDraft()).toBeNull()
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+  })
+
+  // 反向守卫：只剥离"触碰时间"，真实内容差异（这里改了价格）仍必须被判为可恢复
+  it('回归守卫：内容确有差异（改了价格）仍判为可恢复', () => {
+    const withPrice = (price: number, updatedAt: number): Scenario => ({
+      ...sc('默认清单'),
+      skus: [sku({ id: 'k1', price })],
+      updatedAt,
+    })
+    localStorage.setItem(
+      SCENARIOS_KEY,
+      JSON.stringify({ scenarios: [withPrice(100, 2000)], activeId: '默认清单', rev: 2 }),
+    )
+    writeDraft({ scenarios: [withPrice(110, 3000)], activeId: '默认清单', rev: 2 }, 2)
+
+    expect(loadRecoverableDraft()?.workspace.scenarios[0].skus[0].price).toBe(110)
+  })
+
+  it('存储被禁用时读草稿降级为 null（隐私模式不崩首屏）', () => {
+    vi.stubGlobal('localStorage', deadStorage())
+
+    expect(readDraft()).toBeNull()
+    expect(loadRecoverableDraft()).toBeNull()
+    expect(() => clearDraft()).not.toThrow()
+  })
+
+  // 回归守卫（D3）：与 B1 并发用例共用同一套叙事——提交被判过期 = 本页改动没进共享数据，
+  // 若此时没有草稿兜底，用户关掉页面就永久丢了这批改动。
+  it('双标签页：本页提交被判过期后，改动仍留在草稿里可恢复（不丢数据）', async () => {
+    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(wsOf(5, '远端')))
+    const local = wsOf(2, '本地未提交')
+
+    const res = await commitWorkspace(local)
+    expect(res).toMatchObject({ ok: false, reason: 'stale' })
+
+    writeDraft(local, local.rev)
+
+    expect(loadRecoverableDraft()?.workspace.scenarios[0].name).toBe('本地未提交')
+    // 草稿不污染共享数据：对方那一版原样还在
+    expect(JSON.parse(localStorage.getItem(SCENARIOS_KEY) as string).scenarios[0].name).toBe('远端')
+  })
+
+  it('节流器：首次改动立即写入，窗口内合并，窗口结束时补写最后一次', () => {
+    vi.useFakeTimers()
+    const scheduler = createDraftScheduler(1000)
+
+    // 前沿：第一次改动不等窗口，马上落盘（崩溃在窗口内也不至于全丢）
+    scheduler.schedule(wsOf(0, '第一次'), 0)
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('第一次')
+
+    // 窗口内连续改动只挂一个待写项，不逐次写入
+    vi.advanceTimersByTime(300)
+    scheduler.schedule(wsOf(0, '第二次'), 0)
+    scheduler.schedule(wsOf(0, '第三次'), 0)
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('第一次')
+
+    // 后沿：窗口结束补写最后一次，最后一次改动不会丢
+    vi.advanceTimersByTime(700)
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('第三次')
+  })
+
+  it('节流器：窗口过后再改一次，重新立即写入', () => {
+    vi.useFakeTimers()
+    const scheduler = createDraftScheduler(1000)
+
+    scheduler.schedule(wsOf(0, '首批'), 0)
+    vi.advanceTimersByTime(1500)
+
+    scheduler.schedule(wsOf(0, '第二批'), 0)
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('第二批')
+  })
+
+  it('节流器：flush 立刻补写待写内容（pagehide / 隐藏时用）', () => {
+    vi.useFakeTimers()
+    const scheduler = createDraftScheduler(1000)
+
+    scheduler.schedule(wsOf(0, '已写'), 0)
+    vi.advanceTimersByTime(200)
+    scheduler.schedule(wsOf(0, '关页前的最后一次'), 0)
+
+    scheduler.flush()
+
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('关页前的最后一次')
+  })
+
+  it('节流器：flush 无待写内容时是空操作，不凭空造草稿', () => {
+    vi.useFakeTimers()
+    const scheduler = createDraftScheduler(1000)
+    scheduler.schedule(wsOf(0, '已写'), 0)
+
+    scheduler.flush()
+
+    expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull()
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('已写')
+  })
+
+  it('节流器：cancel 丢弃待写内容，之后定时器也不再写入', () => {
+    vi.useFakeTimers()
+    const scheduler = createDraftScheduler(1000)
+
+    scheduler.schedule(wsOf(0, '已写'), 0)
+    vi.advanceTimersByTime(200)
+    scheduler.schedule(wsOf(0, '不该写'), 0)
+
+    scheduler.cancel()
+    vi.advanceTimersByTime(5000)
+
+    expect(readDraft()?.workspace.scenarios[0].name).toBe('已写')
   })
 })

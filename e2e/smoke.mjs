@@ -338,6 +338,114 @@ async function runMultiTab(browser) {
   }
 }
 
+/*
+ * 自动草稿恢复（F6）：与双标签页用例共用同一套叙事，因为"提交被判过期"
+ * 正是草稿要兜的那条缝 —— 此时本页改动压根没进共享数据，
+ * 一旦关掉标签页，不留草稿就是永久丢失（风险卡 D3）。
+ */
+async function runDraftRecovery(browser) {
+  const name = '草稿恢复'
+  const context = await browser.newContext({ viewport: VIEWPORTS.desktop })
+  const pageA = await context.newPage()
+  const pageB = await context.newPage()
+
+  const pageErrors = []
+  for (const p of [pageA, pageB]) p.on('pageerror', (e) => pageErrors.push(e.message))
+
+  const appeared = async (locator, timeout = STEP_TIMEOUT_MS) => {
+    try {
+      await locator.first().waitFor({ timeout })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const rename = async (page, next) => {
+    await page.getByLabel('重命名清单').click()
+    const input = page.locator('input[maxLength="24"]')
+    await input.fill(next)
+    await input.press('Enter')
+  }
+
+  const scenarioNames = (page) =>
+    page.evaluate((key) => {
+      const raw = localStorage.getItem(key)
+      return raw ? (JSON.parse(raw).scenarios ?? []).map((s) => s.name) : []
+    }, 'spec-decision:scenarios')
+
+  try {
+    // A 先进入并生成示例数据
+    await pageA.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    await pageA.getByRole('button', { name: 'AI 生成示例', exact: true }).click()
+    await pageA.locator('[aria-label="删除此行"]:visible').first().waitFor({ timeout: STEP_TIMEOUT_MS })
+    await pageA.waitForTimeout(300)
+
+    // B 随后打开：此刻与 A 同处一个版本
+    await pageB.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    await pageB.getByRole('button', { name: '新建', exact: true }).waitFor({ timeout: STEP_TIMEOUT_MS })
+    await pageA.waitForTimeout(300)
+
+    // ① A 改一次并落盘：落盘版本号前推，B 从此落后
+    await rename(pageA, 'A侧改动')
+    check(`[${name}] A 的改动已落盘`, await appeared(pageA.getByRole('button', { name: 'A侧改动', exact: true })))
+    await pageA.waitForTimeout(300)
+
+    // ② B 在过期状态下再改：提交会被拒（改动进不了共享数据），但草稿必须立刻兜住它
+    await rename(pageB, 'B侧未落盘')
+    check(`[${name}] B 的过期提交被拦下并提示`, await appeared(pageB.getByText('另一标签页已修改，载入？')))
+
+    const draftOnB = await pageB.evaluate((key) => localStorage.getItem(key), 'spec-decision:draft')
+    check(
+      `[${name}] 过期改动已被草稿键兜住`,
+      Boolean(draftOnB && draftOnB.includes('B侧未落盘')),
+      (draftOnB ?? '').slice(0, 200),
+    )
+
+    // ③ 关掉 B（模拟崩溃 / 直接关页）：共享数据里没有 B 的改动，只剩草稿这一份
+    await pageB.close()
+    const names = await scenarioNames(pageA)
+    check(
+      `[${name}] 共享数据里确实没有 B 的改动（草稿是唯一落点）`,
+      names.includes('A侧改动') && !names.includes('B侧未落盘'),
+      names.join(' / '),
+    )
+
+    // ④ 重开：应认出这条没同步上的草稿，交给用户决定恢复还是丢弃
+    const pageC = await context.newPage()
+    pageC.on('pageerror', (e) => pageErrors.push(e.message))
+    await pageC.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    check(`[${name}] 重开时提示恢复未保存的改动`, await appeared(pageC.getByText(/检测到上次.*未保存.*的改动/)))
+
+    await pageC.getByRole('button', { name: '恢复', exact: true }).click()
+    check(`[${name}] 恢复后改动回到编辑器`, await appeared(pageC.getByRole('button', { name: 'B侧未落盘', exact: true })))
+
+    // 恢复后应当正常落盘；落盘完成前不能开新页，否则读到的还是旧数据
+    await pageC.waitForFunction(
+      (key) => {
+        const raw = localStorage.getItem(key)
+        return !!raw && (JSON.parse(raw).scenarios ?? []).some((s) => s.name === 'B侧未落盘')
+      },
+      'spec-decision:scenarios',
+      { timeout: STEP_TIMEOUT_MS },
+    )
+    check(`[${name}] 恢复后的改动已落盘`, true)
+
+    // ⑤ 再重开一次：草稿已与落盘一致，不该再弹恢复提示
+    const pageD = await context.newPage()
+    pageD.on('pageerror', (e) => pageErrors.push(e.message))
+    await pageD.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
+    await pageD.getByRole('button', { name: 'B侧未落盘', exact: true }).waitFor({ timeout: STEP_TIMEOUT_MS })
+    check(`[${name}] 数据已同步后重开不再打扰`, (await pageD.getByText(/检测到上次/).count()) === 0)
+
+    check(`[${name}] 无未捕获异常`, pageErrors.length === 0, pageErrors.join(' ; '))
+  } catch (e) {
+    check(`[${name}] 用例执行未抛错`, false, e?.message ?? String(e))
+  } finally {
+    await context.close()
+  }
+}
+
 /* ---------------- 入口 ---------------- */
 
 async function main() {
@@ -364,6 +472,8 @@ async function main() {
       }
       // 双标签页一致性用例与视口无关，单独跑一遍
       await runMultiTab(browser)
+      // 自动草稿恢复同样要靠"两个标签页制造过期提交"，也单独跑一遍
+      await runDraftRecovery(browser)
     } finally {
       await browser.close()
     }

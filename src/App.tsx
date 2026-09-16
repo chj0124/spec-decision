@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
@@ -7,8 +7,9 @@ import {
   exportWorkspace, importWorkspace,
   commitWorkspace, readStoredRev, subscribeWorkspaceChange,
   onPersistIssue, getPersistIssue, clearPersistIssues,
+  createDraftScheduler, loadRecoverableDraft, clearDraft,
 } from './lib/store'
-import type { Scenario, Workspace, PersistIssue } from './lib/store'
+import type { Scenario, Workspace, PersistIssue, DraftRecord, DraftScheduler } from './lib/store'
 import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
 import type { ShareData } from './lib/share'
 import { loadAiConfig, saveAiConfig, isAiReady, isVisionReady } from './lib/ai'
@@ -60,6 +61,11 @@ export default function App() {
   const [undo, setUndo] = useState<UndoSlot | null>(null)
   /** 非空表示其他标签页写过更新版本，本页可能是旧数据；提示用户是否载入 */
   const [externalChange, setExternalChange] = useState(false)
+  /**
+   * 非空表示重开时发现"上次没同步上的草稿"（崩溃 / 关页 / 提交被判过期）。
+   * 启动时读一次即刻固化到内存：此后即使用户继续编辑冲掉了草稿键，提示条依然有效。
+   */
+  const [draft, setDraft] = useState<DraftRecord | null>(() => loadRecoverableDraft())
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
@@ -95,6 +101,41 @@ export default function App() {
     })
     return () => { cancelled = true }
   }, [workspace])
+
+  /* ---------- 自动草稿（F6）：崩溃 / 关页的恢复安全网 ----------
+   * 编辑中把工作区节流写进本页私有的草稿键（不进 rev 竞争、不写主数据键）：
+   *  - 落盘是异步提交，关页 / 崩溃可能赶在它之前，最后几次编辑就只留在内存里；
+   *  - 提交被判"过期"时本页改动根本进不了共享数据，关页即永久丢失（风险卡 D3）。
+   * 草稿是这两条缝的兜底：内容与落盘一致时重开会静默清掉，不打扰用户。
+   */
+  const draftSchedulerRef = useRef<DraftScheduler | null>(null)
+  if (!draftSchedulerRef.current) draftSchedulerRef.current = createDraftScheduler()
+  const draftScheduler = draftSchedulerRef.current
+  /** 已交给节流器的最后一版；初始为启动态，免得刚打开就为"没改过的工作区"写草稿 */
+  const lastDrafted = useRef<Workspace>(boot)
+
+  useEffect(() => {
+    // 待恢复草稿还没处理时不动草稿键：否则刚打开就把上一条未处理的草稿冲掉
+    if (shared || draft) return
+    if (lastDrafted.current === workspace) return
+    lastDrafted.current = workspace
+    draftScheduler.schedule(workspace, workspace.rev)
+  }, [workspace, shared, draft, draftScheduler])
+
+  // 关页 / 切到后台时把待写的最后一次编辑补上，别让它卡在节流窗口里丢掉
+  useEffect(() => {
+    const flush = () => draftScheduler.flush()
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+      flush()
+    }
+  }, [draftScheduler])
 
   useEffect(() => {
     saveTheme(theme)
@@ -186,10 +227,30 @@ export default function App() {
 
   /** 载入其他标签页写入的最新版本：本页未同步的改动会被丢弃，撤销槽/待确认导入随之作废 */
   const loadExternal = () => {
+    // 本页未同步的改动要一起丢掉：否则节流器补写出的草稿会把它"复活"，
+    // 下次重开又弹一条已经决定不要了的恢复提示
+    draftScheduler.cancel()
+    clearDraft()
     setWorkspace(loadWorkspace())
     setUndo(null)
     setPendingImport(null)
     setExternalChange(false)
+  }
+
+  /** 恢复上次没同步上的草稿：改动回到编辑器；版本号对齐落盘值，免得被"过期"守卫误伤 */
+  const restoreDraft = () => {
+    if (!draft) return
+    setWorkspace({ ...draft.workspace, rev: readStoredRev() })
+    clearDraft()
+    setDraft(null)
+    setExternalChange(false)
+    setPage('workbench')
+  }
+
+  /** 丢弃草稿：用户确认这批改动不需要了 */
+  const discardDraft = () => {
+    clearDraft()
+    setDraft(null)
   }
 
   /* ---------- 工作区备份 / 还原 ---------- */
@@ -390,6 +451,37 @@ export default function App() {
                 aria-label="关闭撤销提示"
               >
                 <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 上次会话有没同步上的改动（崩溃 / 关页 / 提交被判过期）：提示恢复而不是静默丢掉 */}
+        {draft && !shared && (
+          <div
+            role="status"
+            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30"
+          >
+            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
+              <Undo2 className="h-4 w-4 text-brand shrink-0" />
+              <span>
+                检测到上次<strong className="text-brand-deep dark:text-brand">未保存</strong>的改动（
+                {draft.workspace.scenarios.length} 份清单、
+                {draft.workspace.scenarios.reduce((n, s) => n + s.skus.length, 0)} 个规格），是否恢复？
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={restoreDraft}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand text-white hover:opacity-90 transition-opacity"
+              >
+                恢复
+              </button>
+              <button
+                onClick={discardDraft}
+                className="text-xs font-medium px-3 py-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand hover:border-brand/50 transition-all"
+              >
+                丢弃
               </button>
             </div>
           </div>
