@@ -229,120 +229,6 @@ async function runSmoke(browser, name, viewport) {
   }
 }
 
-/* ---------------- 多标签页一致性（B1） ---------------- */
-
-/**
- * 同一 context 下开两个页面：同源 → 共享 localStorage 与 BroadcastChannel。
- * 两个标签页基于同一份基线各加一行，后写的一方必须走三方合并而非整份覆盖 ——
- * 两边的新增都要留下，且另一侧要能收到"已修改"提示并载入。
- */
-async function runMultiTab(browser) {
-  const name = '多标签页'
-  const context = await browser.newContext({ viewport: VIEWPORTS.desktop })
-  const page1 = await context.newPage()
-  const page2 = await context.newPage()
-
-  const errors = []
-  for (const [label, page] of [['页1', page1], ['页2', page2]]) {
-    page.on('pageerror', (e) => errors.push(`${label} pageerror: ${e.message}`))
-    page.on('console', (m) => {
-      if (m.type() === 'error') errors.push(`${label} console.error: ${m.text()}`)
-    })
-  }
-
-  const firstRow = (page) => page.locator('[aria-label="删除此行"]:visible').first()
-  const skuRows = (page) => page.locator('tr', { has: page.locator('[aria-label="删除此行"]') })
-  /**
-   * 点「添加一行规格」并把新行的描述填成 label。
-   * 新行插在末尾，但保存后的三方合并会把别处新增的行追加在它后面（异步发生），
-   * 所以不能取"最后一行"：要先记下当前行数，再按序号定位这一行，否则会填到别处的行上。
-   */
-  const addRow = async (page, label) => {
-    const rows = skuRows(page)
-    const index = await rows.count()
-    await page.getByRole('button', { name: '添加一行规格' }).click()
-    await rows.nth(index).locator('input').first().fill(label)
-  }
-  /** 页面上所有输入框的当前值（用来判断某个规格是否出现在界面上） */
-  const inputValues = (page) =>
-    page.evaluate(() => Array.from(document.querySelectorAll('input')).map((i) => i.value))
-
-  try {
-    // 页1 先造出共同基线，页2 随后读到同一份数据
-    await page1.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
-    await page1.getByRole('button', { name: 'AI 生成示例', exact: true }).click()
-    await firstRow(page1).waitFor({ timeout: STEP_TIMEOUT_MS })
-
-    await page2.goto(BASE_URL, { waitUntil: 'load', timeout: STEP_TIMEOUT_MS })
-    await firstRow(page2).waitFor({ timeout: STEP_TIMEOUT_MS })
-
-    // 页2 先改：新增一行
-    await addRow(page2, 'TAB-B 新增')
-    await page2.waitForFunction(
-      () => (localStorage.getItem('spec-decision:scenarios') ?? '').includes('TAB-B 新增'),
-      null,
-      { timeout: STEP_TIMEOUT_MS },
-    )
-
-    // 页1 后改：新增另一行。页1 的 base 仍停在旧版本 → 保存时必须合并而非整份覆盖
-    await addRow(page1, 'TAB-A 新增')
-    await page1.waitForFunction(
-      () => {
-        const raw = localStorage.getItem('spec-decision:scenarios')
-        if (!raw) return false
-        const names = (JSON.parse(raw).scenarios?.[0]?.skus ?? []).map((s) => s.name)
-        return names.includes('TAB-A 新增') && names.includes('TAB-B 新增')
-      },
-      null,
-      { timeout: STEP_TIMEOUT_MS },
-    )
-    const stored = await page1.evaluate(() => {
-      const ws = JSON.parse(localStorage.getItem('spec-decision:scenarios'))
-      return (ws.scenarios?.[0]?.skus ?? []).map((s) => s.name)
-    })
-    check(
-      `[${name}] 并发写不丢数据：两边的改动都在`,
-      stored.includes('TAB-A 新增') && stored.includes('TAB-B 新增'),
-      stored.join(' | '),
-    )
-
-    // 页1 采纳合并结果后，界面上应同时出现两行
-    await page1.waitForFunction(
-      (l) => Array.from(document.querySelectorAll('input')).some((i) => i.value === l),
-      'TAB-B 新增',
-      { timeout: STEP_TIMEOUT_MS },
-    )
-    const v1 = await inputValues(page1)
-    check(
-      `[${name}] 页1 合并后界面含两处新增`,
-      v1.includes('TAB-A 新增') && v1.includes('TAB-B 新增'),
-      `A=${v1.includes('TAB-A 新增')} B=${v1.includes('TAB-B 新增')}`,
-    )
-
-    // 页2 落后于存储：应出现"另一标签页已修改"提示，载入后同样看到两行
-    await page2.getByText('另一标签页已修改').waitFor({ timeout: STEP_TIMEOUT_MS })
-    check(`[${name}] 检测到外部变更并给出提示`, true)
-    await page2.getByRole('button', { name: '载入', exact: true }).click()
-    await page2.waitForFunction(
-      (l) => Array.from(document.querySelectorAll('input')).some((i) => i.value === l),
-      'TAB-A 新增',
-      { timeout: STEP_TIMEOUT_MS },
-    )
-    const v2 = await inputValues(page2)
-    check(
-      `[${name}] 载入后页2 也含两处新增`,
-      v2.includes('TAB-A 新增') && v2.includes('TAB-B 新增'),
-      `A=${v2.includes('TAB-A 新增')} B=${v2.includes('TAB-B 新增')}`,
-    )
-
-    check(`[${name}] 两个页面均无运行期错误`, errors.length === 0, errors.join(' ; '))
-  } catch (e) {
-    check(`[${name}] 用例执行未抛错`, false, e?.message ?? String(e))
-  } finally {
-    await context.close()
-  }
-}
-
 /* ---------------- 入口 ---------------- */
 
 async function main() {
@@ -367,7 +253,6 @@ async function main() {
       for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         await runSmoke(browser, name, viewport)
       }
-      await runMultiTab(browser)
     } finally {
       await browser.close()
     }

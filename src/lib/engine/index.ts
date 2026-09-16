@@ -10,10 +10,6 @@
  *  - decide   决策主入口
  *
  * 所有调用方仍以 `from './engine'` / `'../lib/engine'` 引用，拆分对调用方完全透明。
- *
- * 硬约束（B4）：engine 层是纯计算内核，**禁止 import `../ai` / `../store`** 等任何带 IO
- * 的模块。需要网络的单位兜底（aiNormalizeUnit）已迁至 `src/lib/aiNormalize.ts`，
- * 由调用方（useUnitNormalize）自行引入，engine 不再导出。新增文件时请遵守此约束。
  */
 export { uid, fmt, isStale, STALE_DAYS, displayUnit, displayQuantity, displayUnitPrice, minOf, maxOf } from './util'
 
@@ -21,6 +17,7 @@ export {
   UNIT_GROUPS,
   normalizeUnit,
   isKnownUnit,
+  aiNormalizeUnit,
   unitMixWarning,
 } from './units'
 

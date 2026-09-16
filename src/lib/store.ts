@@ -118,8 +118,6 @@ export interface Scenario {
 export interface Workspace {
   scenarios: Scenario[]
   activeId: string
-  /** 落盘版本号：每次成功写入 +1。多标签页据此判断"存储是否已被别处推进"（B1） */
-  rev: number
 }
 
 /** 默认决策配置：仅价格维度 */
@@ -244,12 +242,7 @@ function buildMigratedWorkspace(): Workspace {
   )
   // 过一遍清洗：顺带把老数据的价格历史播种补上（见 sanitizeSkus）
   const scenarios = sanitizeScenarios([scenario])
-  return { scenarios, activeId: scenarios[0].id, rev: 0 }
-}
-
-/** 从任意来源取出版本号：非数字 / 缺失一律按 0 处理（老数据没有 rev） */
-function revOf(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
+  return { scenarios, activeId: scenarios[0].id }
 }
 
 /** 首次升级到多清单：把旧的单份 skus/config 包成「我的清单」并落盘 */
@@ -334,7 +327,7 @@ function readWorkspace(): WorkspaceRead {
   const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
     ? parsed.activeId
     : scenarios[0].id
-  return { status: 'ok', workspace: { scenarios, activeId, rev: revOf(parsed.rev) } }
+  return { status: 'ok', workspace: { scenarios, activeId } }
 }
 
 /**
@@ -354,253 +347,6 @@ export function saveWorkspace(ws: Workspace) {
   writeJson(SCENARIOS_KEY, ws)
 }
 
-/* ---------- 多标签页一致性（B1） ----------
- * 同一浏览器开多个标签页时，各自持有一份内存工作区，localStorage 却是共享的。
- * 没有协议时后写的会整份覆盖先写的 —— 用户的改动"凭空消失"且毫无提示。这里做三件事：
- *   1) 写入经 navigator.locks 串行化，避免两个标签页读改写交错（lost update）；
- *   2) 每份工作区带 rev 版本号，写入前若发现存储里 rev 更大，说明别处已推进；
- *   3) 此时不直接覆盖，而是以"本页上次同步快照"为 base 做三方合并：
- *      场景按 id 并集、场景内的 SKU 也按 id 并集 —— 两边的新增都保住；
- *      同一项两边都改过时，以存储里的（较新的）那版为准。
- */
-
-/** 广播通道名与写锁名（同源所有标签页共用同一把） */
-const WS_CHANNEL = 'spec-decision:workspace'
-const WS_LOCK = 'spec-decision:workspace-write'
-
-export type SaveOutcome =
-  /** 无冲突，直接落盘 */
-  | { status: 'saved'; workspace: Workspace }
-  /** 存储里 rev 更大（别处已改）：已三方合并后落盘，调用方应采纳返回的工作区 */
-  | { status: 'merged'; workspace: Workspace }
-  /** 写入失败（配额 / 被禁用），已通过持久化异常通道上报 */
-  | { status: 'failed'; workspace: Workspace }
-
-/** 两个值是否等价（用于判断某一侧是否真的改过） */
-function sameJson(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
-}
-
-/**
- * 合并同一份清单里的 SKU 列表：按 id 并集。
- *  - 只有一侧有：若 base 里也有 → 是另一侧删掉了它（尊重删除）；base 里没有 → 是本侧新增（保留）
- *  - 两侧都有：以 base 判断谁改过；都改过时用 remote（rev 更大的一方）
- */
-function mergeSkus(local: Sku[], remote: Sku[], base: Sku[]): Sku[] {
-  const baseById = new Map(base.map((s) => [s.id, s]))
-  const localById = new Map(local.map((s) => [s.id, s]))
-  const remoteById = new Map(remote.map((s) => [s.id, s]))
-
-  const order: string[] = []
-  const seen = new Set<string>()
-  for (const s of local) if (!seen.has(s.id)) { seen.add(s.id); order.push(s.id) }
-  for (const s of remote) if (!seen.has(s.id)) { seen.add(s.id); order.push(s.id) }
-
-  const out: Sku[] = []
-  for (const id of order) {
-    const l = localById.get(id)
-    const r = remoteById.get(id)
-    const b = baseById.get(id)
-    if (l && r) {
-      const rChanged = !b || !sameJson(r, b)
-      const lChanged = !b || !sameJson(l, b)
-      out.push(rChanged || !lChanged ? r : l)
-    } else if (l) {
-      if (b && !r) continue // base 有、remote 无：remote 删了它
-      out.push(l)
-    } else if (r) {
-      if (b && !l) continue // base 有、local 无：local 删了它
-      out.push(r)
-    }
-  }
-  return out
-}
-
-/** 合并同一份清单：名称 / 配置按"谁改过用谁"，SKU 列表按 id 三方合并 */
-function mergeScenario(local: Scenario, remote: Scenario, base?: Scenario): Scenario {
-  const rChanged = !base || !sameJson({ name: remote.name, config: remote.config }, { name: base.name, config: base.config })
-  const lChanged = !base || !sameJson({ name: local.name, config: local.config }, { name: base.name, config: base.config })
-  const meta = rChanged || !lChanged
-    ? { name: remote.name, config: remote.config }
-    : { name: local.name, config: local.config }
-  return {
-    id: local.id,
-    ...meta,
-    skus: mergeSkus(local.skus, remote.skus, base?.skus ?? []),
-    updatedAt: Math.max(local.updatedAt, remote.updatedAt),
-  }
-}
-
-/**
- * 三方合并工作区：base 是本页"上次与存储对齐时的快照"。
- * 场景按 id 并集（两边新增都保留、尊重删除），激活项优先保留本页仍然存在的那个。
- */
-export function mergeWorkspace(local: Workspace, remote: Workspace, base: Workspace): Workspace {
-  const baseById = new Map(base.scenarios.map((s) => [s.id, s]))
-  const localById = new Map(local.scenarios.map((s) => [s.id, s]))
-  const remoteById = new Map(remote.scenarios.map((s) => [s.id, s]))
-
-  const order: string[] = []
-  const seen = new Set<string>()
-  for (const s of local.scenarios) if (!seen.has(s.id)) { seen.add(s.id); order.push(s.id) }
-  for (const s of remote.scenarios) if (!seen.has(s.id)) { seen.add(s.id); order.push(s.id) }
-
-  const scenarios: Scenario[] = []
-  for (const id of order) {
-    const l = localById.get(id)
-    const r = remoteById.get(id)
-    const b = baseById.get(id)
-    if (l && r) {
-      scenarios.push(mergeScenario(l, r, b))
-    } else if (l) {
-      if (b && !r) continue // base 有、remote 无：remote 删了这份清单
-      scenarios.push(l)
-    } else if (r) {
-      if (b && !l) continue // base 有、local 无：local 删了这份清单
-      scenarios.push(r)
-    }
-  }
-
-  // 兜底：两端至少各有一份，理论上到不了这里；真到了也不能返回空工作区
-  if (scenarios.length === 0) scenarios.push(...local.scenarios)
-
-  const activeId = scenarios.some((s) => s.id === local.activeId)
-    ? local.activeId
-    : scenarios.some((s) => s.id === remote.activeId)
-      ? remote.activeId
-      : scenarios[0].id
-
-  return { scenarios, activeId, rev: Math.max(local.rev, remote.rev) }
-}
-
-/* ---------- 跨标签页信号：storage 事件 + BroadcastChannel ---------- */
-
-/** 已向本页订阅者播报过的最大 rev：storage 与 BroadcastChannel 会重复触发，靠它去重 */
-let lastExternalRev = -1
-
-/** 广播通道（同源所有标签页共享）；环境不支持时为 null，自动退化为仅靠 storage 事件 */
-let channel: BroadcastChannel | null = null
-try {
-  if (typeof BroadcastChannel !== 'undefined') channel = new BroadcastChannel(WS_CHANNEL)
-} catch {
-  channel = null
-}
-
-/** 落盘成功后广播给其它标签页；同时把自己的 rev 记入 lastExternalRev，避免自己的写入被当成外部变更 */
-function broadcastWorkspace(ws: Workspace) {
-  lastExternalRev = Math.max(lastExternalRev, ws.rev)
-  try {
-    channel?.postMessage({ type: 'workspace', workspace: ws })
-  } catch {
-    /* 广播失败不影响落盘本身 */
-  }
-}
-
-const externalListeners = new Set<(ws: Workspace) => void>()
-
-/** 别处推进了存储：只有确实比本页 base 新时才通知，避免旧广播把界面搅乱 */
-function emitExternal(ws: Workspace) {
-  if (!ws || typeof ws.rev !== 'number' || ws.rev <= lastExternalRev) return
-  lastExternalRev = ws.rev
-  const base = workspaceSync.getBase()
-  if (base && ws.rev <= base.rev) return
-  externalListeners.forEach((fn) => fn(ws))
-}
-
-/** 订阅"另一标签页改了工作区"；返回取消订阅函数 */
-export function onExternalWorkspace(fn: (ws: Workspace) => void) {
-  externalListeners.add(fn)
-  return () => {
-    externalListeners.delete(fn)
-  }
-}
-
-if (typeof window !== 'undefined') {
-  // storage 事件只在"别的标签页"写入时触发，正好是我们要的"外部变更"信号
-  window.addEventListener('storage', (e) => {
-    if (e.key !== SCENARIOS_KEY) return
-    const read = readWorkspace()
-    if (read.status === 'ok') emitExternal(read.workspace)
-  })
-}
-
-channel?.addEventListener('message', (e: MessageEvent) => {
-  const data = e.data as { type?: string; workspace?: Workspace } | null
-  if (data?.type === 'workspace' && data.workspace) emitExternal(data.workspace)
-})
-
-/* ---------- 串行化写入器 ---------- */
-
-type LockLike = { request<T>(name: string, cb: () => Promise<T> | T): Promise<T> }
-
-/** 用 Web Locks 串行化写入；环境不支持（测试 / 老浏览器）时退化为直接执行 */
-function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const locks = typeof navigator !== 'undefined'
-    ? (navigator as Navigator & { locks?: LockLike }).locks
-    : undefined
-  if (locks && typeof locks.request === 'function') return locks.request<T>(WS_LOCK, () => fn())
-  return fn()
-}
-
-/** 一个标签页的工作区同步器：各自持有自己的 base 快照（三方合并的公共祖先） */
-export interface WorkspaceSync {
-  /** 登记本页与存储对齐的初始快照；启动时调用一次 */
-  prime(ws: Workspace): void
-  /** 当前 base 快照 */
-  getBase(): Workspace | null
-  /** 串行化、带 rev 校验的保存：检测到别处已推进就合并而非覆盖 */
-  save(next: Workspace): Promise<SaveOutcome>
-}
-
-export function createWorkspaceSync(): WorkspaceSync {
-  let base: Workspace | null = null
-
-  async function commit(next: Workspace): Promise<SaveOutcome> {
-    const read = readWorkspace()
-    const stored = read.status === 'ok' ? read.workspace : null
-
-    // 内容与存储一致（新开一个标签页、或本页状态没有实质变化）：不落盘、不推进 rev、不广播。
-    // 否则"打开标签页"本身就会凭空制造一次版本推进，让别的标签页弹出"另一标签页已修改"的误报。
-    if (
-      stored &&
-      sameJson(
-        { scenarios: next.scenarios, activeId: next.activeId },
-        { scenarios: stored.scenarios, activeId: stored.activeId },
-      )
-    ) {
-      base = stored
-      return { status: 'saved', workspace: stored }
-    }
-
-    let out: Workspace
-    let merged = false
-    if (stored && base && stored.rev > base.rev) {
-      // 别处已推进：合并而非覆盖，避免把别人的改动抹掉
-      out = mergeWorkspace(next, stored, base)
-      merged = true
-    } else {
-      out = { scenarios: next.scenarios, activeId: next.activeId, rev: 0 }
-    }
-
-    out.rev = Math.max(stored?.rev ?? 0, base?.rev ?? 0) + 1
-    if (!writeJson(SCENARIOS_KEY, out)) return { status: 'failed', workspace: out }
-    base = out
-    broadcastWorkspace(out)
-    return { status: merged ? 'merged' : 'saved', workspace: out }
-  }
-
-  return {
-    prime(ws) {
-      base = ws
-    },
-    getBase: () => base,
-    save: (next) => withWriteLock(() => commit(next)),
-  }
-}
-
-/** 全应用共享的同步器（浏览器运行时） */
-export const workspaceSync = createWorkspaceSync()
-
 /* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */
 
 const BACKUP_APP = 'spec-decision'
@@ -619,7 +365,7 @@ export function exportWorkspace(ws: Workspace): string {
     app: BACKUP_APP,
     v: BACKUP_VERSION,
     exportedAt: Date.now(),
-    workspace: { scenarios: ws.scenarios, activeId: ws.activeId, rev: ws.rev },
+    workspace: { scenarios: ws.scenarios, activeId: ws.activeId },
   }
   return JSON.stringify(backup, null, 2)
 }
@@ -635,7 +381,7 @@ export function importWorkspace(text: string): Workspace | null {
     const activeId = raw?.activeId && scenarios.some((s) => s.id === raw.activeId)
       ? raw.activeId
       : scenarios[0].id
-    return { scenarios, activeId, rev: revOf(raw?.rev) }
+    return { scenarios, activeId }
   } catch {
     return null
   }

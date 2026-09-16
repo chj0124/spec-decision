@@ -3,10 +3,9 @@ import type { Sku, Theme, DecisionConfig, Preference } from './lib/types'
 import { decide } from './lib/engine'
 import {
   loadTheme, saveTheme, migrateV1ToV2,
-  loadWorkspace, newScenario,
+  loadWorkspace, saveWorkspace, newScenario,
   exportWorkspace, importWorkspace,
   onPersistIssue, getPersistIssue, clearPersistIssues,
-  workspaceSync, onExternalWorkspace,
 } from './lib/store'
 import type { Scenario, Workspace, PersistIssue } from './lib/store'
 import { encodeShare, decodeShare, buildShareUrl, readShareToken, clearShareHash } from './lib/share'
@@ -20,7 +19,7 @@ import { unitMixWarning } from './lib/engine'
 import Workbench from './components/Workbench'
 import AiSettings from './components/AiSettings'
 import ScenarioBar from './components/ScenarioBar'
-import { Sun, Moon, LineChart, PencilLine, Settings, Download, Upload, Eye, X, Undo2, RefreshCw } from 'lucide-react'
+import { Sun, Moon, LineChart, PencilLine, Settings, Download, Upload, Eye, X, Undo2 } from 'lucide-react'
 
 // 报告页依赖 recharts（体积较大）且首屏不可见，按需加载以避免拖慢工作台首屏
 const Report = lazy(() => import('./components/Report'))
@@ -58,8 +57,6 @@ export default function App() {
   const [persistIssue, setPersistIssue] = useState<PersistIssue | null>(() => getPersistIssue())
   /** 最近一次破坏性操作（删除清单 / 覆盖导入）的可回退槽；非空时显示撤销提示条 */
   const [undo, setUndo] = useState<UndoSlot | null>(null)
-  /** 另一标签页推进了本地数据：非空时提示用户载入（不直接覆盖，避免打断当前编辑） */
-  const [externalChange, setExternalChange] = useState<Workspace | null>(null)
 
   const active = workspace.scenarios.find((s) => s.id === workspace.activeId) ?? workspace.scenarios[0]
   const skus = shared ? shared.skus : active.skus
@@ -69,27 +66,7 @@ export default function App() {
   // 这样挂载当次的写入失败才不会被漏掉。
   useEffect(() => onPersistIssue(setPersistIssue), [])
 
-  // 登记本页与存储对齐的初始快照（多标签页三方合并的 base）。必须早于下面的保存副作用。
-  useEffect(() => {
-    workspaceSync.prime(boot)
-  }, [boot])
-
-  // 另一标签页改了本地数据：只提示，不擅自覆盖当前编辑
-  useEffect(() => onExternalWorkspace(setExternalChange), [])
-
-  // 保存经同步层串行化：若发现存储里 rev 更大（别处已改）则三方合并而非覆盖，
-  // 合并结果才是权威版本，采纳它并把提示条收起
-  useEffect(() => {
-    let cancelled = false
-    workspaceSync.save(workspace).then((out) => {
-      if (cancelled || out.status !== 'merged') return
-      setWorkspace(out.workspace)
-      setExternalChange(null)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [workspace])
+  useEffect(() => saveWorkspace(workspace), [workspace])
 
   useEffect(() => {
     saveTheme(theme)
@@ -154,7 +131,7 @@ export default function App() {
 
   const createScenario = (name: string) => setWorkspace((w) => {
     const sc = newScenario(name)
-    return { ...w, scenarios: [...w.scenarios, sc], activeId: sc.id }
+    return { scenarios: [...w.scenarios, sc], activeId: sc.id }
   })
 
   // 改名也是一次改动，同样刷新 updatedAt，否则清单条上的"多久没动过"会失真
@@ -177,14 +154,6 @@ export default function App() {
     if (!undo) return
     setWorkspace((w) => applyUndo(w, undo))
     setUndo(null)
-  }
-
-  /** 载入另一标签页的最新工作区：整份采纳，并把本页 base 对齐到它 */
-  const loadExternal = () => {
-    if (!externalChange) return
-    workspaceSync.prime(externalChange)
-    setWorkspace(externalChange)
-    setExternalChange(null)
   }
 
   /* ---------- 工作区备份 / 还原 ---------- */
@@ -237,7 +206,7 @@ export default function App() {
     const d = new Date()
     const name = `分享导入 ${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const sc = newScenario(name, shared.skus, shared.config)
-    setWorkspace((w) => ({ ...w, scenarios: [...w.scenarios, sc], activeId: sc.id }))
+    setWorkspace((w) => ({ scenarios: [...w.scenarios, sc], activeId: sc.id }))
     exitShared()
     setPage('workbench')
   }
@@ -382,34 +351,6 @@ export default function App() {
                 onClick={() => setUndo(null)}
                 className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-amber-500 hover:border-amber-400/50 transition-all"
                 aria-label="关闭撤销提示"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* 另一标签页改了同一份本地数据：提示载入，不擅自覆盖用户正在编辑的内容 */}
-        {externalChange && (
-          <div
-            role="status"
-            className="glass rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3 border-brand/30"
-          >
-            <div className="flex items-center gap-2 text-xs text-slate-500 flex-1">
-              <RefreshCw className="h-4 w-4 text-brand shrink-0" />
-              <span>另一标签页已修改，载入？</span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={loadExternal}
-                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand text-white hover:opacity-90 transition-opacity"
-              >
-                载入
-              </button>
-              <button
-                onClick={() => setExternalChange(null)}
-                className="p-1.5 rounded-lg border border-edge text-slate-500 hover:text-brand hover:border-brand/40 transition-all"
-                aria-label="关闭外部修改提示"
               >
                 <X className="h-3.5 w-3.5" />
               </button>

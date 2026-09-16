@@ -2,9 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   loadWorkspace, exportWorkspace, importWorkspace, saveWorkspace, saveSkus, saveTheme,
   loadTheme, onPersistIssue, getPersistIssue, clearPersistIssues,
-  createWorkspaceSync,
 } from './store'
-import type { PersistIssue, Scenario, Workspace } from './store'
+import type { PersistIssue, Workspace } from './store'
 import type { PricePoint, Sku } from './types'
 
 const SCENARIOS_KEY = 'spec-decision:scenarios'
@@ -57,7 +56,7 @@ function deadStorage() {
 
 const quotaErr = () => new DOMException('quota exceeded', 'QuotaExceededError')
 
-const emptyWorkspace: Workspace = { scenarios: [], activeId: 'x', rev: 0 }
+const emptyWorkspace: Workspace = { scenarios: [], activeId: 'x' }
 
 const sku = (over: Partial<Sku> = {}): Sku => ({
   id: 'a',
@@ -82,7 +81,6 @@ function seed(skus: Sku[]) {
       },
     ],
     activeId: 's1',
-    rev: 0,
   }
   localStorage.setItem(SCENARIOS_KEY, JSON.stringify(ws))
 }
@@ -197,7 +195,7 @@ describe('持久化失败不再静默吞掉', () => {
     seed([sku({ name: '旧值' })])
 
     broken = true
-    saveWorkspace({ scenarios: [], activeId: 'y', rev: 0 })
+    saveWorkspace({ scenarios: [], activeId: 'y' })
 
     expect(getPersistIssue()?.key).toBe(SCENARIOS_KEY)
     expect(loadWorkspace().scenarios[0].skus[0].name).toBe('旧值')
@@ -231,7 +229,7 @@ describe('持久化失败不再静默吞掉', () => {
 
 describe('saveWorkspace 只写主数据键（A10：删除 active-scenario 僵尸键）', () => {
   it('写入后 localStorage 键集合只有主数据键，不再有只写不读的 active-scenario', () => {
-    saveWorkspace({ scenarios: [], activeId: 'x', rev: 0 })
+    saveWorkspace({ scenarios: [], activeId: 'x' })
 
     expect(listKeys()).toEqual([SCENARIOS_KEY])
     expect(listKeys()).not.toContain('spec-decision:active-scenario')
@@ -253,7 +251,7 @@ describe('loadWorkspace 遇脏数据不覆盖原键（A11）', () => {
   })
 
   it('结构不可用（scenarios 为空）：同样备份且不覆盖', () => {
-    const raw = JSON.stringify({ scenarios: [], activeId: 'x', rev: 0 })
+    const raw = JSON.stringify({ scenarios: [], activeId: 'x' })
     localStorage.setItem(SCENARIOS_KEY, raw)
 
     const ws = loadWorkspace()
@@ -277,138 +275,5 @@ describe('loadWorkspace 遇脏数据不覆盖原键（A11）', () => {
 
     expect(ws.scenarios.length).toBe(1)
     expect(listKeys()).toEqual([SCENARIOS_KEY])
-  })
-})
-
-describe('多标签页一致性（B1）：并发写不静默丢失', () => {
-  /** 造一份单清单工作区（未清洗的原始形状，仅用于落盘） */
-  const rawWs = (skus: Sku[], rev = 0): Workspace => ({
-    scenarios: [
-      { id: 's1', name: '清单', skus, config: { dims: [], priceWeight: 50, preference: 'value' }, updatedAt: 1 },
-    ],
-    activeId: 's1',
-    rev,
-  })
-
-  /** 落盘一份原始数据再读回，得到与真实运行时一致（已清洗、含 priceHistory）的 base */
-  const baseWorkspace = (skus: Sku[], rev = 0): Workspace => {
-    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(rawWs(skus, rev)))
-    return loadWorkspace()
-  }
-
-  /** 从 base 派生本页工作区：沿用 base 里原样的 SKU 对象，只替换/追加给定的那份列表 */
-  const withSkus = (base: Workspace, skus: Sku[]): Workspace => ({
-    ...base,
-    scenarios: [{ ...base.scenarios[0], skus, updatedAt: base.scenarios[0].updatedAt + 1 }],
-  })
-
-  /** 让两个同步器共享同一份"存储"，模拟两个标签页各自持有同一个 base 快照 */
-  function twoTabs(base: Workspace) {
-    localStorage.setItem(SCENARIOS_KEY, JSON.stringify(base))
-    const tabA = createWorkspaceSync()
-    const tabB = createWorkspaceSync()
-    tabA.prime(base)
-    tabB.prime(base)
-    return { tabA, tabB }
-  }
-
-  it('两个标签页各加一个 SKU：合并后两个都在，无静默丢失', async () => {
-    const base = baseWorkspace([sku({ id: 'A' })])
-    const { tabA, tabB } = twoTabs(base)
-    const a0 = base.scenarios[0].skus[0]
-
-    // A 先落盘（rev 0 → 1）
-    const a = await tabA.save(withSkus(base, [a0, sku({ id: 'C' })]))
-    expect(a.status).toBe('saved')
-
-    // B 落后于存储：绝不整份覆盖，合并后落盘
-    const b = await tabB.save(withSkus(base, [a0, sku({ id: 'B' })]))
-    expect(b.status).toBe('merged')
-
-    const stored = loadWorkspace()
-    expect(stored.scenarios[0].skus.map((s) => s.id).sort()).toEqual(['A', 'B', 'C'])
-    expect(stored.rev).toBe(2)
-  })
-
-  it('同一 SKU 两边都改：以存储中较新的那版为准，且不会复制成两条', async () => {
-    const base = baseWorkspace([sku({ id: 'A', name: '原始' })])
-    const { tabA, tabB } = twoTabs(base)
-    const a0 = base.scenarios[0].skus[0]
-
-    await tabA.save(withSkus(base, [{ ...a0, name: 'A改' }]))
-    const b = await tabB.save(withSkus(base, [{ ...a0, price: 22, name: 'B改' }]))
-    expect(b.status).toBe('merged')
-
-    const skus = loadWorkspace().scenarios[0].skus
-    expect(skus).toHaveLength(1)
-    expect(skus[0].name).toBe('A改')
-  })
-
-  it('两个标签页各建一份清单：合并后两份都在', async () => {
-    const base = baseWorkspace([sku({ id: 'A' })])
-    const { tabA, tabB } = twoTabs(base)
-    const s1 = base.scenarios[0]
-
-    const mk = (id: string, name: string, skuId: string): Scenario => ({
-      id, name, skus: [sku({ id: skuId })], config: s1.config, updatedAt: 2,
-    })
-    await tabA.save({ scenarios: [s1, mk('s2', 'A 建的', 'X')], activeId: 's2', rev: 0 })
-    const b = await tabB.save({ scenarios: [s1, mk('s3', 'B 建的', 'Y')], activeId: 's3', rev: 0 })
-    expect(b.status).toBe('merged')
-
-    expect(loadWorkspace().scenarios.map((s) => s.id).sort()).toEqual(['s1', 's2', 's3'])
-  })
-
-  it('本页的删除不被别处旧快照"复活"', async () => {
-    const base = baseWorkspace([sku({ id: 'A' }), sku({ id: 'B' })])
-    const { tabA, tabB } = twoTabs(base)
-    const [a0, b0] = base.scenarios[0].skus
-
-    // A 删掉 B 并落盘；B 页基于旧 base（仍含 B）只改了 A 的名字
-    await tabA.save(withSkus(base, [a0]))
-    const b = await tabB.save(withSkus(base, [{ ...a0, name: 'A改' }, b0]))
-    expect(b.status).toBe('merged')
-
-    const skus = loadWorkspace().scenarios[0].skus
-    expect(skus.map((s) => s.id)).toEqual(['A'])
-    expect(skus[0].name).toBe('A改')
-  })
-
-  it('无并发：连续保存 rev 单调递增，不误判为冲突', async () => {
-    const base = baseWorkspace([sku({ id: 'A' })])
-    const sync = createWorkspaceSync()
-    sync.prime(base)
-
-    const a = base.scenarios[0].skus[0]
-    const r1 = await sync.save(withSkus(base, [a, sku({ id: 'B' })]))
-    expect(r1.status).toBe('saved')
-    expect(r1.workspace.rev).toBe(1)
-
-    const r2 = await sync.save(withSkus(base, [...r1.workspace.scenarios[0].skus, sku({ id: 'C' })]))
-    expect(r2.status).toBe('saved')
-    expect(r2.workspace.rev).toBe(2)
-  })
-
-  it('内容没变就不推进 rev：打开标签页本身不算"外部变更"', async () => {
-    const base = baseWorkspace([sku({ id: 'A' })], 7)
-    const sync = createWorkspaceSync()
-    sync.prime(base)
-
-    const r = await sync.save(base)
-
-    expect(r.status).toBe('saved')
-    expect(r.workspace.rev).toBe(7)
-    expect(loadWorkspace().rev).toBe(7)
-  })
-
-  it('落盘失败：返回 failed 并上报持久化异常', async () => {
-    vi.stubGlobal('localStorage', flakyStorage(() => quotaErr()))
-    const sync = createWorkspaceSync()
-    sync.prime(rawWs([sku({ id: 'A' })]))
-
-    const r = await sync.save(rawWs([sku({ id: 'A' })]))
-
-    expect(r.status).toBe('failed')
-    expect(getPersistIssue()?.key).toBe(SCENARIOS_KEY)
   })
 })

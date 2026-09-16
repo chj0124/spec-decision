@@ -15,7 +15,6 @@ const sc = (id: string, name = id) => ({ ...newScenario(name), id })
 const ws = (...ids: string[]): Workspace => ({
   scenarios: ids.map((id) => sc(id)),
   activeId: ids[0],
-  rev: 0,
 })
 
 describe('removeScenario 删除清单', () => {
@@ -31,7 +30,7 @@ describe('removeScenario 删除清单', () => {
   })
 
   it('删掉激活项时焦点回落到剩下的第一份，不指向已不存在的清单', () => {
-    const w: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'a', rev: 0 }
+    const w: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'a' }
     const next = removeScenario(w, 'a')
     expect(next.scenarios.map((s) => s.id)).toEqual(['b'])
     expect(next.activeId).toBe('b')
@@ -53,7 +52,7 @@ describe('captureDelete 撤销槽快照', () => {
   })
 
   it('记录被删清单的内容、原位置与当时的激活项', () => {
-    const w: Workspace = { scenarios: [sc('a', '零食'), sc('b', '饮料')], activeId: 'a', rev: 0 }
+    const w: Workspace = { scenarios: [sc('a', '零食'), sc('b', '饮料')], activeId: 'a' }
     const slot = captureDelete(w, 'b')!
     expect(slot).toMatchObject({ kind: 'delete', index: 1, activeId: 'a' })
     expect(slot.label).toBe('已删除清单「饮料」')
@@ -85,7 +84,7 @@ describe('restoreScenario 撤销删除', () => {
   })
 
   it('被删的正好是当时在看的那份，撤销后焦点还给被删的那份', () => {
-    const before: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'b', rev: 0 }
+    const before: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'b' }
     const slot = captureDelete(before, 'b')!
     const after = removeScenario(before, 'b')
     expect(after.activeId).toBe('a')
@@ -93,7 +92,7 @@ describe('restoreScenario 撤销删除', () => {
   })
 
   it('被删的不是激活项时，不改变用户当前的焦点', () => {
-    const before: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'a', rev: 0 }
+    const before: Workspace = { scenarios: [sc('a'), sc('b')], activeId: 'a' }
     const slot = captureDelete(before, 'b')!
     expect(restoreScenario(removeScenario(before, 'b'), slot).activeId).toBe('a')
   })
