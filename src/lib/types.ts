@@ -40,6 +40,8 @@ export interface Sku {
   params?: Record<string, ParamValue>
   /** 价格历史：历次录入的总价（同日合并、条数有上限），用于提示涨价/降价 */
   priceHistory?: PricePoint[]
+  /** 目标价（元）：到手价 ≤ 它时在报告与清单上打点提示，纯本地比较 */
+  targetPrice?: number
 }
 
 export interface ComputedSku extends Sku {

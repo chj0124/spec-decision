@@ -6,6 +6,7 @@ import { AutoWidthInput } from './AutoWidthInput'
 import { DimInput } from './DimInput'
 import { PriceTrendBadge } from './PriceTrendBadge'
 import { PriceAgeBadge } from './PriceAgeBadge'
+import { PricePositionBadge } from './PricePositionBadge'
 import { useSkuRow } from './useSkuRow'
 
 export interface RowFieldsProps {
@@ -75,6 +76,7 @@ export function RowFields({ s, idx, update, updateParam, remove, duplicate, inde
             className="field py-1.5 text-xs tabular"
           />
           <PriceTrendBadge history={s.priceHistory} />
+          <PricePositionBadge history={s.priceHistory} targetPrice={s.targetPrice} />
           <PriceAgeBadge history={s.priceHistory} />
         </div>
       </td>

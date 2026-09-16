@@ -6,7 +6,7 @@
  *  - 全序列截断到 MAX_PRICE_POINTS 条，最旧的先丢
  */
 import type { PricePoint } from '../types'
-import { round } from './util'
+import { round, minOf, maxOf } from './util'
 
 /** 单个规格最多保留的历史点数（超出丢弃最旧） */
 export const MAX_PRICE_POINTS = 30
@@ -84,6 +84,44 @@ export function priceTrend(history: PricePoint[] | undefined): PriceTrend | null
     delta,
     deltaPct: first > 0 ? round((delta / first) * 100, 1) : 0,
     direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat',
+  }
+}
+
+export interface PriceStats {
+  points: PricePoint[]
+  /** 当前价（序列最后一条，即最近一次录入） */
+  current: number
+  min: number
+  max: number
+  avg: number
+  /** 历史价格中 ≥ 当前价的比例（0-100）：越高说明现在买越划算 */
+  percentile: number
+  /** 当前价即历史最低（含持平） */
+  isLowest: boolean
+  /** 当前价相对均价的百分比（正=高于均价，负=低于均价） */
+  vsAvgPct: number
+}
+
+/**
+ * 价格位置统计：回答"现在这个价，在历史里算什么位置"。
+ * 纯计算，无 IO；没有有效点时返回 null，调用方据此不渲染任何位置提示。
+ */
+export function priceStats(history: PricePoint[] | undefined): PriceStats | null {
+  const points = (history ?? []).filter((p) => p && p.price > 0)
+  if (points.length === 0) return null
+  const prices = points.map((p) => p.price)
+  const current = prices[prices.length - 1]
+  const min = minOf(prices)
+  const avg = round(prices.reduce((sum, p) => sum + p, 0) / prices.length)
+  return {
+    points,
+    current,
+    min,
+    max: maxOf(prices),
+    avg,
+    percentile: round((prices.filter((p) => p >= current).length / prices.length) * 100, 0),
+    isLowest: current <= min,
+    vsAvgPct: avg > 0 ? round(((current - avg) / avg) * 100, 1) : 0,
   }
 }
 

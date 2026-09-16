@@ -5,6 +5,7 @@ import { Copy, Trash2 } from 'lucide-react'
 import { DimInput } from './DimInput'
 import { PriceTrendBadge } from './PriceTrendBadge'
 import { PriceAgeBadge } from './PriceAgeBadge'
+import { PricePositionBadge } from './PricePositionBadge'
 import { useSkuRow } from './useSkuRow'
 
 export interface SkuRowCardProps {
@@ -75,6 +76,7 @@ export function SkuRowCard({ s, idx, update, updateParam, remove, duplicate, dim
           <span className="text-[10px] text-slate-400 mb-0.5 flex items-center gap-1">
             总价 ¥
             <PriceTrendBadge history={s.priceHistory} />
+            <PricePositionBadge history={s.priceHistory} targetPrice={s.targetPrice} />
             <PriceAgeBadge history={s.priceHistory} />
           </span>
           <input

@@ -70,7 +70,7 @@ const sku = (over: Partial<Sku> = {}): Sku => ({
 })
 
 /** 写入一份"老数据"（不含 priceHistory 的清单） */
-function seed(skus: Sku[]) {
+function seed(skus: Sku[], updatedAt = 1) {
   const ws: Workspace = {
     scenarios: [
       {
@@ -78,7 +78,7 @@ function seed(skus: Sku[]) {
         name: '测试清单',
         skus,
         config: { dims: [], priceWeight: 50, preference: 'value' },
-        updatedAt: 1,
+        updatedAt,
       },
     ],
     activeId: 's1',
@@ -131,6 +131,36 @@ describe('loadWorkspace 价格历史迁移', () => {
     const history = loadWorkspace().scenarios[0].skus[0].priceHistory
     expect(history).toHaveLength(1)
     expect(history?.[0].price).toBe(9.9)
+  })
+
+  // 回归守卫（D15）：播种时间必须取清单的 updatedAt，而非 Date.now()。
+  // 用 now 会把"久未更新"的老数据伪装成"刚刚录入"，让新鲜度/过期提示全部失效。
+  it('老数据播种时间取清单 updatedAt，而不是当前时间', () => {
+    seed([sku()], 1)
+    const seeded = loadWorkspace().scenarios[0].skus[0].priceHistory?.[0]
+    expect(seeded?.t).toBe(1)
+    expect(seeded?.price).toBe(9.9)
+  })
+
+  it('清单缺少 updatedAt 时播种时间回退当前时间（不能变成 0/NaN）', () => {
+    const before = Date.now()
+    localStorage.setItem(
+      SCENARIOS_KEY,
+      JSON.stringify({
+        scenarios: [
+          {
+            id: 's1',
+            name: '测试清单',
+            skus: [sku()],
+            config: { dims: [], priceWeight: 50, preference: 'value' },
+          },
+        ],
+        activeId: 's1',
+        rev: 0,
+      }),
+    )
+    const t = loadWorkspace().scenarios[0].skus[0].priceHistory?.[0].t ?? 0
+    expect(t).toBeGreaterThanOrEqual(before)
   })
 })
 

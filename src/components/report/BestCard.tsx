@@ -1,9 +1,9 @@
 import type { ComputedSku } from '../../lib/types'
 import { motion } from 'framer-motion'
 import {
-  Trophy, Lightbulb, CheckCircle2, AlertTriangle, RefreshCw, TrendingDown, TrendingUp, Minus,
+  Trophy, Lightbulb, CheckCircle2, AlertTriangle, RefreshCw, TrendingDown, TrendingUp, Minus, Target,
 } from 'lucide-react'
-import { fmt, displayUnit, displayUnitPrice, displayQuantity, fmtPointDay, STALE_DAYS } from '../../lib/engine'
+import { fmt, displayUnit, displayUnitPrice, displayQuantity, fmtPointDay, hitsTargetPrice, STALE_DAYS } from '../../lib/engine'
 import type { PriceTrend } from '../../lib/engine'
 import { packWord } from '../../lib/view-model'
 import { CountUp } from './CountUp'
@@ -23,6 +23,8 @@ export function BestCard({
   reasons: string[]
 }) {
   const TrendIcon = bestTrend?.direction === 'up' ? TrendingUp : bestTrend?.direction === 'down' ? TrendingDown : Minus
+  // 目标价达成：用户自己设的阈值被跨过，是最强的行动信号（纯本地比较，不依赖通知 API）
+  const targetHit = hitsTargetPrice(best)
   return (
     <motion.section
       initial={{ opacity: 0, y: 20 }}
@@ -87,6 +89,16 @@ export function BestCard({
                   <span className="text-slate-400">
                     （{bestTrend.points.length} 次记录 · {fmtPointDay(bestTrend.points[0].t)} 起）
                   </span>
+                </span>
+              </div>
+            )}
+
+            {/* 目标价提醒：冠军到手价已降到用户设定的目标价以内，直接给出"可以下手"的结论 */}
+            {targetHit && (
+              <div className="mt-4 inline-flex items-start gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs leading-relaxed text-emerald-600 dark:text-emerald-400">
+                <Target className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>
+                  已达目标价：总价 {fmt.yuan(best.price)} ≤ 目标价 {fmt.yuan(Number(best.targetPrice))}，可以下手了
                 </span>
               </div>
             )}

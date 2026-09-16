@@ -40,6 +40,15 @@ export function computeSku(s: Sku): ComputedSku {
   }
 }
 
+/**
+ * 到手价是否已达目标价。
+ * 未设目标价 / 目标价非正 / 价格未录入时一律不算命中 —— 宁可不提示，也不给假信号。
+ */
+export function hitsTargetPrice(s: Pick<Sku, 'price' | 'targetPrice'>): boolean {
+  const target = Number(s.targetPrice)
+  return Number.isFinite(target) && target > 0 && s.price > 0 && s.price <= target
+}
+
 /* ============ 多维度加权评分 ============ */
 
 /** 把单个维度的原始取值归一化到 0-100 分 */

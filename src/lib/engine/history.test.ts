@@ -4,6 +4,7 @@ import {
   recordPrice,
   sanitizePriceHistory,
   priceTrend,
+  priceStats,
   fmtPointDay,
 } from './history'
 import type { PricePoint } from '../types'
@@ -133,6 +134,69 @@ describe('priceTrend 走势汇总', () => {
 
   it('过滤掉非法点后再判断', () => {
     expect(priceTrend([{ t: at(2026, 1, 5), price: 0 }, { t: at(2026, 1, 6), price: 5 }])).toBeNull()
+  })
+})
+
+describe('priceStats 价格位置统计', () => {
+  it('没有有效点返回 null（无历史就谈不上"贵/便宜"）', () => {
+    expect(priceStats(undefined)).toBeNull()
+    expect(priceStats([])).toBeNull()
+    expect(priceStats([{ t: at(2026, 1, 5), price: 0 }])).toBeNull()
+  })
+
+  it('只有一个点：最低=最高=均价=当前价，分位 100 且判定为历史最低', () => {
+    const stats = priceStats([{ t: at(2026, 1, 5), price: 9 }])
+    expect(stats).toMatchObject({
+      current: 9,
+      min: 9,
+      max: 9,
+      avg: 9,
+      percentile: 100,
+      isLowest: true,
+      vsAvgPct: 0,
+    })
+  })
+
+  it('当前价即历史最低：isLowest、分位 100、相对均价为负', () => {
+    const stats = priceStats([
+      { t: at(2026, 1, 5), price: 12 },
+      { t: at(2026, 1, 6), price: 10 },
+      { t: at(2026, 1, 7), price: 8 },
+    ])
+    expect(stats).toMatchObject({
+      current: 8,
+      min: 8,
+      max: 12,
+      avg: 10,
+      percentile: 100,
+      isLowest: true,
+      vsAvgPct: -20,
+    })
+  })
+
+  it('当前价高于均价：不是最低、分位偏低、相对均价为正', () => {
+    const stats = priceStats([
+      { t: at(2026, 1, 5), price: 10 },
+      { t: at(2026, 1, 6), price: 8 },
+      { t: at(2026, 1, 7), price: 12 },
+    ])
+    expect(stats).toMatchObject({
+      current: 12,
+      min: 8,
+      max: 12,
+      avg: 10,
+      percentile: 33,
+      isLowest: false,
+      vsAvgPct: 20,
+    })
+  })
+
+  it('过滤非法点后再统计（0/NaN 不参与最低均价）', () => {
+    const stats = priceStats([
+      { t: at(2026, 1, 5), price: 0 },
+      { t: at(2026, 1, 6), price: 5 },
+    ])
+    expect(stats).toMatchObject({ current: 5, min: 5, max: 5, avg: 5, isLowest: true })
   })
 })
 

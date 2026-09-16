@@ -32,12 +32,14 @@ export {
   recordPrice,
   sanitizePriceHistory,
   priceTrend,
+  priceStats,
   fmtPointDay,
 } from './history'
-export type { PriceTrend } from './history'
+export type { PriceTrend, PriceStats } from './history'
 
 export {
   computeSku,
+  hitsTargetPrice,
   scoreItems,
   marginAnalysis,
   buildWarnings,

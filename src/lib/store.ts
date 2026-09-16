@@ -261,15 +261,18 @@ function migrateToWorkspace(): Workspace {
  *  - 老数据没有历史但有价格时，用当前价格播下第一个点 ——
  *    这样后续改价才有比较基准，能提示涨价/降价
  */
-function sanitizeSkus(input: unknown): Sku[] {
+function sanitizeSkus(input: unknown, updatedAt?: number): Sku[] {
   if (!Array.isArray(input)) return []
   const now = Date.now()
+  // 播种时间取清单的 updatedAt：用 now 会把"久未更新"的老数据伪装成"刚刚录入"，
+  // 让基于时间的新鲜度/过期提示全部失效（D15）
+  const seededAt = typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : now
   return (input as Array<Partial<Sku>>)
     .filter((s): s is Sku => Boolean(s && s.id))
     .map((s) => {
       const history = sanitizePriceHistory(s.priceHistory)
       const price = Number(s.price)
-      const seeded = history.length > 0 || !(price > 0) ? history : [{ t: now, price }]
+      const seeded = history.length > 0 || !(price > 0) ? history : [{ t: seededAt, price }]
       return { ...s, priceHistory: seeded }
     })
 }
@@ -285,7 +288,7 @@ function sanitizeScenarios(input: unknown): Scenario[] {
     .map((s) => ({
       ...s,
       name: s.name || '未命名清单',
-      skus: sanitizeSkus(s.skus),
+      skus: sanitizeSkus(s.skus, s.updatedAt),
       config: { ...DEFAULT_CONFIG, ...s.config, dims: Array.isArray(s.config.dims) ? s.config.dims : [] },
       updatedAt: s.updatedAt ?? Date.now(),
     }))
