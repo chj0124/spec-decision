@@ -167,86 +167,99 @@ function shortName(s: ComputedSku): string {
  * - poor   小亏：单价涨幅 3%-10%
  * - bad    不建议：单价涨幅 > 10%
  */
-export function marginAnalysis(sorted: ComputedSku[]): MarginInsight[] {
+export function marginAnalysis(sorted: ComputedSku[], baseId?: string): MarginInsight[] {
   if (sorted.length < 2) return []
 
-  // 1) 合并同价同规格（仅口味/颜色不同）的条目
+  // 1) 合并同价同规格（仅口味/颜色不同）的条目，并按总量升序排列
   const merged = mergeVariantSkus(sorted)
   if (merged.length < 2) return []
+  merged.sort((a, b) => a.totalQuantity - b.totalQuantity)
+
+  // 2) 定基准模式：基准档之后（总量更大）的每一档都直接与基准档对比
+  if (baseId) {
+    const idx = merged.findIndex((m) => m.id === baseId)
+    if (idx >= 0) {
+      const base = merged[idx]
+      return merged.slice(idx + 1).map((item) => compareTier(base, item))
+    }
+  }
 
   const out: MarginInsight[] = []
-  // 2) 相邻对比：每个档位 vs 前一个档位
+  // 3) 默认相邻对比：每个档位 vs 前一个档位
   for (let i = 1; i < merged.length; i++) {
-    const base = merged[i - 1]
-    const item = merged[i]
-    const extraCost = round(item.price - base.price, 2)
-    const extraQuantity = round(item.totalQuantity - base.totalQuantity, 2)
-    const dropPct =
-      base.unitPrice > 0
-        ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
-        : 0
-    const marginalSaving = round(base.unitPrice - item.unitPrice, 6)
-    // 净省/净亏：多得的量按前档单价折算价值 - 多花的钱。直观反映"买这个总共能省多少"
-    const netSaving = round(extraQuantity * base.unitPrice - extraCost, 2)
-
-    // 分级
-    let grade: MarginGrade
-    if (extraCost <= 0 && extraQuantity > 0) {
-      grade = 'great'
-    } else if (dropPct > 15) {
-      grade = 'great'
-    } else if (dropPct > 3) {
-      grade = 'good'
-    } else if (dropPct >= -3) {
-      grade = 'fair'
-    } else if (dropPct >= -10) {
-      grade = 'poor'
-    } else {
-      grade = 'bad'
-    }
-
-    // 结论文案用短名（规格部分），避免长规格名被截断后关键信息丢失
-    const baseShort = shortName(base)
-    // 三段式表述：①比前档贵多少 ②多换到多少量 ③每单位省/贵多少钱
-    // 例："比「16g×4袋」贵 ¥3.56，多 160g，每 g 省 2.23 分，划算。"
-    // 用过滤+join 避免某段为空时出现连续逗号
-    const costStr = `比「${baseShort}」贵 ${fmt.yuan(extraCost)}`
-    const qtyStr = extraQuantity > 0
-      ? `多 ${fmt.num(displayQuantity(extraQuantity, item.unit))}${displayUnit(item.unit)}`
-      : ''
-    const showUnit = displayUnit(item.unit)
-    const marginStr = marginalSaving > 0
-      ? `每${showUnit}省 ${fmt.priceUnit(displayUnitPrice(marginalSaving, item.unit))}`
-      : marginalSaving < 0
-        ? `每${showUnit}反贵 ${fmt.priceUnit(displayUnitPrice(Math.abs(marginalSaving), item.unit))}`
-        : `每${showUnit}持平`
-    const tail = grade === 'great' ? '超值'
-      : grade === 'good' ? '划算'
-      : grade === 'fair' ? '看需求选'
-      : grade === 'poor' ? '不划算'
-      : '别买'
-    const body = [costStr, qtyStr, marginStr].filter(Boolean).join('，')
-    const verdict = grade === 'great' && extraCost <= 0
-      ? `比「${baseShort}」更便宜还更多，直接闭眼入。`
-      : `${body}，${tail}。`
-
-    out.push({
-      fromId: base.id,
-      toId: item.id,
-      fromName: base.name,
-      toName: item.name,
-      extraCost,
-      extraQuantity,
-      unit: item.unit,
-      unitPriceDropPct: dropPct,
-      marginalSaving,
-      netSaving,
-      grade,
-      worthIt: grade === 'great' || grade === 'good',
-      verdict,
-    })
+    out.push(compareTier(merged[i - 1], merged[i]))
   }
   return out
+}
+
+/** 单对档位对比：升级到 item 档比基准 base 档多花多少钱、多得多少量、净省多少 */
+function compareTier(base: ComputedSku, item: ComputedSku): MarginInsight {
+  const extraCost = round(item.price - base.price, 2)
+  const extraQuantity = round(item.totalQuantity - base.totalQuantity, 2)
+  const dropPct =
+    base.unitPrice > 0
+      ? round(((base.unitPrice - item.unitPrice) / base.unitPrice) * 100, 1)
+      : 0
+  const marginalSaving = round(base.unitPrice - item.unitPrice, 6)
+  // 净省/净亏：多得的量按基准档单价折算价值 - 多花的钱。直观反映"买这个总共能省多少"
+  const netSaving = round(extraQuantity * base.unitPrice - extraCost, 2)
+
+  // 分级
+  let grade: MarginGrade
+  if (extraCost <= 0 && extraQuantity > 0) {
+    grade = 'great'
+  } else if (dropPct > 15) {
+    grade = 'great'
+  } else if (dropPct > 3) {
+    grade = 'good'
+  } else if (dropPct >= -3) {
+    grade = 'fair'
+  } else if (dropPct >= -10) {
+    grade = 'poor'
+  } else {
+    grade = 'bad'
+  }
+
+  // 结论文案用短名（规格部分），避免长规格名被截断后关键信息丢失
+  const baseShort = shortName(base)
+  // 三段式表述：①比基准档贵多少 ②多换到多少量 ③每单位省/贵多少钱
+  // 例："比「16g×4袋」贵 ¥3.56，多 160g，每 g 省 2.23 分，划算。"
+  // 用过滤+join 避免某段为空时出现连续逗号
+  const costStr = `比「${baseShort}」贵 ${fmt.yuan(extraCost)}`
+  const qtyStr = extraQuantity > 0
+    ? `多 ${fmt.num(displayQuantity(extraQuantity, item.unit))}${displayUnit(item.unit)}`
+    : ''
+  const showUnit = displayUnit(item.unit)
+  const marginStr = marginalSaving > 0
+    ? `每${showUnit}省 ${fmt.priceUnit(displayUnitPrice(marginalSaving, item.unit))}`
+    : marginalSaving < 0
+      ? `每${showUnit}反贵 ${fmt.priceUnit(displayUnitPrice(Math.abs(marginalSaving), item.unit))}`
+      : `每${showUnit}持平`
+  const tail = grade === 'great' ? '超值'
+    : grade === 'good' ? '划算'
+    : grade === 'fair' ? '看需求选'
+    : grade === 'poor' ? '不划算'
+    : '别买'
+  const body = [costStr, qtyStr, marginStr].filter(Boolean).join('，')
+  const verdict = grade === 'great' && extraCost <= 0
+    ? `比「${baseShort}」更便宜还更多，直接闭眼入。`
+    : `${body}，${tail}。`
+
+  return {
+    fromId: base.id,
+    toId: item.id,
+    fromName: base.name,
+    toName: item.name,
+    extraCost,
+    extraQuantity,
+    unit: item.unit,
+    unitPriceDropPct: dropPct,
+    marginalSaving,
+    netSaving,
+    grade,
+    worthIt: grade === 'great' || grade === 'good',
+    verdict,
+  }
 }
 
 /* ============ 提示与结论文案 ============ */

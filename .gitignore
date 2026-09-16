@@ -22,3 +22,5 @@ playwright-report/
 *.tsbuildinfo
 # 编辑器自动生成的分享缓存（非源码）
 .trae-html-share-packages/
+# 会话内上传的参考截图（非源码）
+.uploads/
