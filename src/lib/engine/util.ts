@@ -7,6 +7,35 @@ export const round = (n: number, d = 4) => {
 /** 生成本地唯一 id（仅用于行标识与列表 key，不参与持久化身份校验） */
 export const uid = () => Math.random().toString(36).slice(2, 9)
 
+/**
+ * 数组最小值（循环实现）。
+ *
+ * 为什么不用 `Math.min(...arr)`：展开运算符会把每个元素作为实参压栈，元素数量过大
+ * （实测 10 万行级别的表格列 / 规格列表）会直接抛 `RangeError: Maximum call stack size exceeded`。
+ * 语义与 `Math.min` 对齐：空数组返回 `Infinity`；任一元素为 `NaN` 时返回 `NaN`。
+ */
+export const minOf = (arr: readonly number[]): number => {
+  let m = Infinity
+  for (const n of arr) {
+    if (Number.isNaN(n)) return NaN
+    if (n < m) m = n
+  }
+  return m
+}
+
+/**
+ * 数组最大值（循环实现）。与 `Math.max` 语义对齐：空数组返回 `-Infinity`；任一元素为 `NaN` 时返回 `NaN`。
+ * 见 [minOf] 关于栈溢出的说明。
+ */
+export const maxOf = (arr: readonly number[]): number => {
+  let m = -Infinity
+  for (const n of arr) {
+    if (Number.isNaN(n)) return NaN
+    if (n > m) m = n
+  }
+  return m
+}
+
 /** 数据新鲜度门槛：价格记录超过这么多天没更新，结论就该打问号 */
 export const STALE_DAYS = 30
 

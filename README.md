@@ -53,14 +53,14 @@
 
 React 18 + TypeScript + Vite 6 + Tailwind CSS 3 + Framer Motion + Recharts + lucide-react + html-to-image
 
-测试：Vitest（单元，12 个测试文件）+ Playwright（e2e 冒烟，双视口）
+测试：Vitest（单元，15 个测试文件，含覆盖率阈值门禁）+ Playwright（e2e 冒烟，双视口）
 
 ## 本地开发
 
 ```bash
 npm install        # 国内可用 --registry=https://registry.npmmirror.com
 npm run dev        # 开发预览
-npm test           # 单元测试（vitest）
+npm test           # 单元测试（vitest + 覆盖率门禁，报告落盘 coverage/）
 npm run build      # 生产构建（tsc + vite）→ dist/
 npm run preview    # 预览构建产物
 npm run e2e        # 构建后跑 Playwright 冒烟（桌面 + 手机两视口）

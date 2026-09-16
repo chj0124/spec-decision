@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import type { ServerResponse } from 'node:http'
 import { defineConfig, type Connect, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
-import { proxyChat, proxyModels } from './shared/aiProxyCore.js'
+import { MAX_BODY_BYTES, isPayloadTooLarge, isTextTooLarge, proxyChat, proxyModels } from './shared/aiProxyCore.js'
 
 // 版本号单一来源：package.json。
 // 构建时内联成字符串字面量，既不把整个 package.json 打进产物，
@@ -24,6 +24,12 @@ delete process.env.https_proxy
 // 由 vite dev server（Node 端）转发到真实服务商，响应原样返回。
 // 校验与转发逻辑在 shared/aiProxyCore.js，与 Vercel / Cloudflare 部署共用一份。
 function aiProxyPlugin(): Plugin {
+  const send = (res: ServerResponse, status: number, payload: string | object) => {
+    res.statusCode = status
+    res.setHeader('Content-Type', 'application/json')
+    res.end(typeof payload === 'string' ? payload : JSON.stringify(payload))
+  }
+
   const middleware = async (req: Connect.IncomingMessage, res: ServerResponse, next: Connect.NextFunction) => {
     const url = req.url || ''
     const isModels = url.startsWith('/api/ai-models')
@@ -31,26 +37,51 @@ function aiProxyPlugin(): Plugin {
     if (!isModels && !isChat) return next()
 
     if (req.method !== 'POST') {
-      res.statusCode = 405
-      res.end('Method Not Allowed')
+      send(res, 405, { error: 'Method Not Allowed' })
+      return
+    }
+
+    // 体积预检：Content-Length 可信时直接拒绝，避免把超大 body 读进内存
+    if (isPayloadTooLarge(req.headers['content-length'])) {
+      send(res, 413, { error: '请求体过大' })
       return
     }
 
     try {
       const chunks: Buffer[] = []
+      let size = 0
+      let overflow = false
       for await (const chunk of req) {
-        chunks.push(chunk as Buffer)
+        const buf = chunk as Buffer
+        size += buf.length
+        if (size > MAX_BODY_BYTES) {
+          // 超限后继续消费但不再缓存：把内存占用钉死在上限，
+          // 且不提前 break（异步迭代器 break 会销毁请求流，导致 413 响应写不出去）。
+          overflow = true
+          continue
+        }
+        chunks.push(buf)
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'))
+      if (overflow) {
+        send(res, 413, { error: '请求体过大' })
+        return
+      }
+
+      const raw = Buffer.concat(chunks).toString('utf-8')
+      if (isTextTooLarge(raw)) {
+        send(res, 413, { error: '请求体过大' })
+        return
+      }
+
+      const body = JSON.parse(raw)
       const { status, text } = isChat ? await proxyChat(body) : await proxyModels(body)
       res.statusCode = status
       res.setHeader('Content-Type', 'application/json')
       res.end(text)
     } catch (e: any) {
+      // 只记录错误信息，绝不打印请求体（内含 API Key 与图片 base64）
       console.error('[ai-proxy] error:', e?.message ?? e)
-      res.statusCode = 502
-      res.setHeader('Content-Type', 'application/json')
-      res.end(JSON.stringify({ error: e?.message ?? '上游请求失败' }))
+      send(res, e instanceof SyntaxError ? 400 : 502, { error: e?.message ?? '上游请求失败' })
     }
   }
 
@@ -77,7 +108,10 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(version),
   },
   build: {
-    chunkSizeWarningLimit: 900,
+    // 阈值回调到 400KB：原先 900KB 高于全部产物（最大的是懒加载的 charts ≈334KB），
+    // 等于把告警彻底关掉——任何单块膨胀都无声无息。400KB 高于 charts 留出合理余量，
+    // 又能让"某块突然涨到 400KB 以上"在构建日志里立刻可见（真正的体积回归门禁在 CI）。
+    chunkSizeWarningLimit: 400,
     rollupOptions: {
       output: {
         // 用函数按真实模块 id 分组：数组写法只匹配包名本身，

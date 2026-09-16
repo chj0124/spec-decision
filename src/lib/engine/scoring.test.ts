@@ -271,3 +271,27 @@ describe('buildWarningsStructured 结构化避坑提示', () => {
     }
   })
 })
+
+describe('大数据量护栏（A9：极值统计改循环，避免 Math.min/max(...arr) 栈溢出）', () => {
+  const SIZE = 200_000
+  const weightDim: ParamDim = { id: 'weight', label: '净含量', type: 'higher-better', weight: 50 }
+
+  /** SIZE 条规格，单价与维度取值都各不相同，覆盖价格范围与维度范围两条极值统计路径 */
+  const many = (): Sku[] =>
+    Array.from({ length: SIZE }, (_, i) =>
+      sku({ id: `s${i}`, price: 10 + i, quantity: 100, packs: 1, params: { weight: i + 1 } }),
+    )
+
+  it('scoreItems 20 万条不抛 RangeError，且逐条都有得分', () => {
+    const items = many().map(computeSku)
+    let out: ReturnType<typeof scoreItems> = []
+    expect(() => { out = scoreItems(items, cfg({ dims: [weightDim] })) }).not.toThrow()
+    expect(out).toHaveLength(SIZE)
+    expect(out.every((i) => Number.isFinite(i.score))).toBe(true)
+  })
+
+  it('buildWarningsStructured 20 万条不抛 RangeError', () => {
+    const items = many().map(computeSku)
+    expect(() => buildWarningsStructured(items)).not.toThrow()
+  })
+})

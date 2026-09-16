@@ -8,7 +8,7 @@ import type {
   Sku,
   WarningPair,
 } from '../types'
-import { round, fmt, displayUnit, displayQuantity, displayUnitPrice } from './util'
+import { round, fmt, displayUnit, displayQuantity, displayUnitPrice, minOf, maxOf } from './util'
 import { normalizeUnit } from './units'
 import { parseFlavor } from './spec'
 
@@ -86,8 +86,8 @@ export function scoreItems(
 
   // 价格维度范围
   const prices = items.map((i) => i.unitPrice).filter((p) => p > 0)
-  const minP = Math.min(...prices)
-  const maxP = Math.max(...prices)
+  const minP = minOf(prices)
+  const maxP = maxOf(prices)
   const priceRange = maxP - minP || 1
 
   // 各数值维度的取值范围（text 类型用索引范围）
@@ -109,7 +109,7 @@ export function scoreItems(
       dimRanges.set(dim.id, null)
       continue
     }
-    dimRanges.set(dim.id, { min: Math.min(...vals), max: Math.max(...vals) })
+    dimRanges.set(dim.id, { min: minOf(vals), max: maxOf(vals) })
   }
 
   // 总权重（防 0）
@@ -319,7 +319,7 @@ export function buildWarningsStructured(items: ComputedSku[]): {
   }
 
   // 检测过度囤货
-  const maxTotal = Math.max(...items.map((i) => i.totalQuantity))
+  const maxTotal = maxOf(items.map((i) => i.totalQuantity))
   const avgTotal = items.reduce((s, i) => s + i.totalQuantity, 0) / items.length
   if (maxTotal > avgTotal * 2.5) {
     notes.push(

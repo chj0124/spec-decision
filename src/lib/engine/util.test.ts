@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fmt, isStale, STALE_DAYS } from './util'
+import { fmt, isStale, STALE_DAYS, minOf, maxOf } from './util'
 
 const DAY = 86_400_000
 /** 固定"现在"，避免用例依赖真实时钟导致跨天/跨时区抖动 */
@@ -61,5 +61,39 @@ describe('isStale 数据新鲜度判定', () => {
 
   it('未来时间戳不算过期（时钟偏差不该触发告警）', () => {
     expect(isStale(now + DAY, now)).toBe(false)
+  })
+})
+
+describe('minOf / maxOf 循环实现（替代 Math.min/max(...arr)）', () => {
+  it('与 Math.min/Math.max 结果一致', () => {
+    const arr = [3, 1, 4, 1, 5, 9, 2, 6]
+    expect(minOf(arr)).toBe(Math.min(...arr))
+    expect(maxOf(arr)).toBe(Math.max(...arr))
+  })
+
+  it('空数组语义与 Math.min/Math.max 对齐', () => {
+    expect(minOf([])).toBe(Infinity)
+    expect(maxOf([])).toBe(-Infinity)
+  })
+
+  it('含 NaN 时返回 NaN（与 Math.min/Math.max 对齐，不静默忽略脏值）', () => {
+    expect(minOf([1, NaN, 3])).toBeNaN()
+    expect(maxOf([1, NaN, 3])).toBeNaN()
+  })
+
+  it('20 万元素不抛 RangeError（Math.max(...arr) 在该量级会栈溢出）', () => {
+    const big = new Array(200_000)
+    let expectedMin = Infinity
+    let expectedMax = -Infinity
+    for (let i = 0; i < big.length; i++) {
+      const v = (i * 7919) % 100_000
+      big[i] = v
+      if (v < expectedMin) expectedMin = v
+      if (v > expectedMax) expectedMax = v
+    }
+    expect(() => minOf(big)).not.toThrow()
+    expect(() => maxOf(big)).not.toThrow()
+    expect(minOf(big)).toBe(expectedMin)
+    expect(maxOf(big)).toBe(expectedMax)
   })
 })

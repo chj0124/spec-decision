@@ -544,6 +544,13 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
     if (imgs.length > 0) handleImages(imgs)
   }
 
+  // 全局监听器只在挂载时注册一次；用 ref 持有最新的 pickImage（内部依赖 skus / 分组等最新状态），
+  // 这样输入数据变化时不会反复卸载重挂 window 事件，也不会因闭包过期而拿到旧 skus。
+  const pickImageRef = useRef(pickImage)
+  useEffect(() => {
+    pickImageRef.current = pickImage
+  })
+
   // 全局拖入 / 粘贴监听
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {
@@ -565,12 +572,12 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       e.preventDefault()
       dragDepth.current = 0
       setDragging(false)
-      pickImage(e.dataTransfer.files)
+      pickImageRef.current(e.dataTransfer.files)
     }
     const onPaste = (e: ClipboardEvent) => {
       // 优先处理图片（截图粘贴）
       if (e.clipboardData?.files.length) {
-        pickImage(e.clipboardData.files)
+        pickImageRef.current(e.clipboardData.files)
         return
       }
       // 没有图片时尝试解析文本表格（Excel/电商页面/Markdown 复制）
@@ -611,8 +618,7 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
       window.removeEventListener('drop', onDrop)
       window.removeEventListener('paste', onPaste)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [skus])
+  }, [])
 
   const validCount = skus.filter((s) => s.price > 0 && s.quantity > 0 && s.packs > 0).length
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)

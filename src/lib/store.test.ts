@@ -85,6 +85,16 @@ function seed(skus: Sku[]) {
   localStorage.setItem(SCENARIOS_KEY, JSON.stringify(ws))
 }
 
+/** 列出当前 localStorage 中的所有键（memoryStorage 只暴露 key(i) / length） */
+function listKeys(): string[] {
+  const keys: string[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
+    if (k) keys.push(k)
+  }
+  return keys.sort()
+}
+
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage())
   clearPersistIssues()
@@ -214,5 +224,56 @@ describe('持久化失败不再静默吞掉', () => {
 
     saveSkus([])
     expect(calls).toBe(0)
+  })
+})
+
+describe('saveWorkspace 只写主数据键（A10：删除 active-scenario 僵尸键）', () => {
+  it('写入后 localStorage 键集合只有主数据键，不再有只写不读的 active-scenario', () => {
+    saveWorkspace({ scenarios: [], activeId: 'x' })
+
+    expect(listKeys()).toEqual([SCENARIOS_KEY])
+    expect(listKeys()).not.toContain('spec-decision:active-scenario')
+  })
+})
+
+describe('loadWorkspace 遇脏数据不覆盖原键（A11）', () => {
+  const CORRUPT_KEY = 'spec-decision:corrupt-backup'
+
+  it('JSON 解析失败：降级为可用工作区，原键保持不动并备份原文', () => {
+    const broken = '{ 这不是合法 JSON'
+    localStorage.setItem(SCENARIOS_KEY, broken)
+
+    const ws = loadWorkspace()
+
+    expect(ws.scenarios.length).toBeGreaterThan(0)
+    expect(localStorage.getItem(SCENARIOS_KEY)).toBe(broken)
+    expect(localStorage.getItem(CORRUPT_KEY)).toBe(broken)
+  })
+
+  it('结构不可用（scenarios 为空）：同样备份且不覆盖', () => {
+    const raw = JSON.stringify({ scenarios: [], activeId: 'x' })
+    localStorage.setItem(SCENARIOS_KEY, raw)
+
+    const ws = loadWorkspace()
+
+    expect(ws.scenarios.length).toBeGreaterThan(0)
+    expect(localStorage.getItem(SCENARIOS_KEY)).toBe(raw)
+    expect(localStorage.getItem(CORRUPT_KEY)).toBe(raw)
+  })
+
+  it('数据正常：纯读取，不改动原键也不产生备份', () => {
+    seed([sku({ name: '正常值' })])
+    const before = localStorage.getItem(SCENARIOS_KEY)
+
+    expect(loadWorkspace().scenarios[0].skus[0].name).toBe('正常值')
+    expect(localStorage.getItem(SCENARIOS_KEY)).toBe(before)
+    expect(localStorage.getItem(CORRUPT_KEY)).toBeNull()
+  })
+
+  it('首次使用（键不存在）：显式迁移并落盘', () => {
+    const ws = loadWorkspace()
+
+    expect(ws.scenarios.length).toBe(1)
+    expect(listKeys()).toEqual([SCENARIOS_KEY])
   })
 })

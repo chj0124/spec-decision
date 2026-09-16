@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    // 被根 tsconfig.json 以 project reference 引用，必须 composite；
+    // 而 composite 不允许 noEmit，所以退一步只产出声明文件到 node_modules/.tmp，
+    // 仓库里不会多出任何编译产物。
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "./node_modules/.tmp/tsconfig.node-types",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    // 代理核心与 Vercel Functions 是纯 JS：靠 allowJs 让它们进入程序参与类型推导
+    // （checkJs 保持关闭——对这些文件逐行报错超出本次范围，但调用方至少不再拿到 any）。
+    "allowJs": true,
+    "checkJs": false,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["node"]
+  },
+  "include": ["api", "shared", "e2e", "vite.config.ts", "vitest.config.ts"]
+}

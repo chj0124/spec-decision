@@ -333,7 +333,12 @@ interface WarnOverlayProps {
   /** 图右侧为避坑标注预留的宽度（= BarChart 的 margin.right），用于给编号旁的注文折行、防裁切 */
   warnRightRoom?: number
   xAxisMap?: Record<string, { scale?: (v: number) => number }>
-  yAxisMap?: Record<string, { scale?: (v: string) => number; bandSize?: number }>
+  yAxisMap?: Record<string, {
+    scale?: (v: number | string) => number
+    bandSize?: number
+    /** 分类轴重名时 recharts 保留的原始名称域（此时 scale 的 domain 已换成序号域） */
+    duplicateDomain?: Array<string | number>
+  }>
   offset?: { top: number; left: number; width: number; height: number }
 }
 
@@ -360,10 +365,24 @@ function WarnOverlay({
   const bandSize = yAxis?.bandSize ?? 36
   if (!warnTheme || !offset || !xScale || !yScale || warnPairs.length === 0) return <g />
 
+  // 规格名一旦重名（示例数据里「鸡肉·10kg」就会出现三次），recharts 的 allowDuplicatedCategory
+  // 会让分类轴保留原名 domain 到 duplicateDomain，而把 scale 的 domain 换成序号域 [0..n)。
+  // 此时按名称取坐标得到 undefined，加减后就是 NaN，写进 SVG 属性会被浏览器判为非法而报错。
+  // 所以要么用名称、要么用行下标，且一律先校验坐标有限再画。
+  const indexDomain = Array.isArray(yAxis?.duplicateDomain) && yAxis.duplicateDomain.length > 0
+  /** 行所在条带的顶边 y；拿不到有限值时返回 null，宁可少画一条也不能把 NaN 写进 SVG */
+  const bandTop = (row: SpecRow, index: number) => {
+    const top = yScale(indexDomain ? index : row.name)
+    return typeof top === 'number' && Number.isFinite(top) ? top : null
+  }
+
   const amber = warnTheme.series.margin
   const plotLeft = offset.left
   const plotRight = offset.left + offset.width
-  const maxTip = warnRows.reduce((m, r) => Math.max(m, xScale(r[warnKey])), 0)
+  const maxTip = warnRows.reduce((m, r) => {
+    const v = xScale(r[warnKey])
+    return Number.isFinite(v) ? Math.max(m, v) : m
+  }, 0)
   // 括线 / 编号一律放"所有柱子右侧"的空白里；柱子太靠右时退到右边距内
   const spineX = Math.min(Math.max(maxTip + 44, plotRight - 6), plotRight + 56)
 
@@ -379,13 +398,18 @@ function WarnOverlay({
   return (
     <g>
       {warnPairs.map((p, i) => {
-        const a = warnRows.find((r) => r.id === p.fromId) // 被对照里较贵的那条
-        const b = warnRows.find((r) => r.id === p.toId) // 较便宜的那条
-        if (!a || !b) return null
+        const ai = warnRows.findIndex((r) => r.id === p.fromId) // 被对照里较贵的那条
+        const bi = warnRows.findIndex((r) => r.id === p.toId) // 较便宜的那条
+        if (ai < 0 || bi < 0) return null
+        const a = warnRows[ai]
+        const b = warnRows[bi]
+        const topA = bandTop(a, ai)
+        const topB = bandTop(b, bi)
         const xA = xScale(a[warnKey])
         const xB = xScale(b[warnKey])
-        const yA = yScale(a.name) + bandSize / 2
-        const yB = yScale(b.name) + bandSize / 2
+        if (topA === null || topB === null || !Number.isFinite(xA) || !Number.isFinite(xB)) return null
+        const yA = topA + bandSize / 2
+        const yB = topB + bandSize / 2
         const lo = Math.min(xA, xB)
         const hi = Math.max(xA, xB)
         const midY = (yA + yB) / 2
@@ -408,8 +432,8 @@ function WarnOverlay({
         return (
           <g key={`warn-${i}`}>
             {/* 行高亮：被对照的两行整行铺一层淡黄底 */}
-            <rect x={plotLeft} y={yScale(a.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
-            <rect x={plotLeft} y={yScale(b.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+            <rect x={plotLeft} y={topA} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+            <rect x={plotLeft} y={topB} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
             {/* 差值段：便宜那条的柱端拉一条竖直虚线过去，充当"基准线" */}
             <line x1={xB} y1={yB} x2={xB} y2={yA} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
             {/* 贵那条上"多出来的一截"，并标清贵了多少 */}
@@ -766,6 +790,21 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     }
   }
 
+  // 组件内所有「延时恢复文案 / 延时关菜单」的定时器统一登记，卸载时一次性清理，
+  // 避免卸载后回调触发 setState 造成 "setState on unmounted component" 告警与内存泄漏。
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
+  const schedule = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timersRef.current.delete(id)
+      fn()
+    }, ms)
+    timersRef.current.add(id)
+  }
+  useEffect(() => () => {
+    timersRef.current.forEach((id) => clearTimeout(id))
+    timersRef.current.clear()
+  }, [])
+
   // 复制决策摘要到剪贴板（2 秒后恢复按钮文案）
   const [copied, setCopied] = useState(false)
   // 导出 / 分享下拉菜单开关
@@ -775,7 +814,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     if (!text) return
     await writeClipboard(text)
     setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    schedule(() => setCopied(false), 2000)
   }
 
   // 生成只读分享链接并复制（数据压缩进 URL hash，无需后端）
@@ -796,7 +835,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
       setShareTooLong(null)
       await writeClipboard(url)
       setShareCopied(true)
-      setTimeout(() => setShareCopied(false), 2500)
+      schedule(() => setShareCopied(false), 2500)
     } finally {
       setSharing(false)
     }
@@ -807,7 +846,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     await writeClipboard(shareTooLong.url)
     setShareTooLong(null)
     setShareCopied(true)
-    setTimeout(() => setShareCopied(false), 2500)
+    schedule(() => setShareCopied(false), 2500)
   }
 
   // 有干扰维度（同定价多口味）时，默认用簇化简视图
@@ -1035,7 +1074,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                     <Printer className="h-4 w-4 shrink-0" /> 打印 / 存为 PDF
                   </button>
                   <button
-                    onClick={() => { copySummary(); setTimeout(() => setShareMenuOpen(false), 1400) }}
+                    onClick={() => { copySummary(); schedule(() => setShareMenuOpen(false), 1400) }}
                     className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left transition-colors"
                     title="复制纯文本决策摘要（推荐规格、排名、超预算排除说明、边际效益与避坑提示）到剪贴板"
                   >
@@ -1045,7 +1084,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   </button>
                   {getShareUrl && (
                     <button
-                      onClick={() => { copyShareLink(); setTimeout(() => setShareMenuOpen(false), 1400) }}
+                      onClick={() => { copyShareLink(); schedule(() => setShareMenuOpen(false), 1400) }}
                       disabled={sharing}
                       className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left transition-colors disabled:opacity-60"
                       title="生成只读分享链接（清单与配置压缩进 URL，不含任何服务器）并复制到剪贴板"

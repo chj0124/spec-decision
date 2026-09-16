@@ -176,13 +176,20 @@ export async function recognizeImage(file: File): Promise<RecognizeResult> {
   }
 
   // 2) 兼容旧的 VITE_RECOGNIZE_ENDPOINT Serverless 端点
+  //    该端点默认关闭、需服务端配置 RECOGNIZE_TOKEN 开启，因此这里在配置了
+  //    VITE_RECOGNIZE_TOKEN 时携带鉴权头（前端令牌是公开的，真正的护栏是服务端的
+  //    来源白名单 + 限流 + 配额；推荐直接用上面「自带密钥视觉模型」路径）。
   const endpoint = import.meta.env.VITE_RECOGNIZE_ENDPOINT as string | undefined
   if (endpoint) {
     try {
       const { base64, mime } = await compressImage(file)
+      const token = import.meta.env.VITE_RECOGNIZE_TOKEN as string | undefined
       const resp = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ image: base64, mime, prompt: RECOGNIZE_PROMPT }),
       })
       if (!resp.ok) throw new Error(`识别服务返回 ${resp.status}`)

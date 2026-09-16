@@ -6,7 +6,7 @@ const THEME_KEY = 'spec-decision:theme'
 const CONFIG_KEY = 'spec-decision:config'
 const MIGRATED_KEY = 'spec-decision:migrated-v2'
 const SCENARIOS_KEY = 'spec-decision:scenarios'
-const ACTIVE_KEY = 'spec-decision:active-scenario'
+const CORRUPT_BACKUP_KEY = 'spec-decision:corrupt-backup'
 
 /* ---------- 持久化健康度：写入失败不再静默吞掉 ----------
  * 页脚承诺"数据仅保存在你的浏览器本地"，那么"没存上"这件事必须让用户知道，
@@ -95,6 +95,15 @@ function writeJson(key: string, value: unknown): boolean {
     return false
   }
   return write(key, text)
+}
+
+/**
+ * 脏数据留档：把无法解析 / 结构不可用的原文备份到独立键。
+ * 这样即使用户数据损坏，也有据可查、可人工恢复，而不是被静默覆盖后凭空消失。
+ * 备份写入失败只上报异常，不抛出（不能因为"存不下备份"把首屏带崩）。
+ */
+function backupCorrupt(raw: string) {
+  write(CORRUPT_BACKUP_KEY, raw)
 }
 
 /** 一份独立清单（场景）：自己的 SKU 列表 + 决策配置，互不干扰 */
@@ -219,8 +228,11 @@ export function migrateV1ToV2(): { skus: Sku[]; config: DecisionConfig; changed:
   return { skus: newSkus, config: newConfig, changed: true }
 }
 
-/** 首次升级到多清单：把旧的单份 skus/config 包成「我的清单」 */
-function migrateToWorkspace(): Workspace {
+/**
+ * 由旧的单份 skus/config 组装出初始工作区（纯函数，不落盘）。
+ * 供两条降级路径复用：首次使用（键不存在）、脏数据（禁止覆盖原键）。
+ */
+function buildMigratedWorkspace(): Workspace {
   const legacySkus = loadSkus()
   const legacyConfig = loadConfig()
   const scenario = newScenario(
@@ -230,7 +242,12 @@ function migrateToWorkspace(): Workspace {
   )
   // 过一遍清洗：顺带把老数据的价格历史播种补上（见 sanitizeSkus）
   const scenarios = sanitizeScenarios([scenario])
-  const ws: Workspace = { scenarios, activeId: scenarios[0].id }
+  return { scenarios, activeId: scenarios[0].id }
+}
+
+/** 首次升级到多清单：把旧的单份 skus/config 包成「我的清单」并落盘 */
+function migrateToWorkspace(): Workspace {
+  const ws = buildMigratedWorkspace()
   saveWorkspace(ws)
   return ws
 }
@@ -272,28 +289,62 @@ function sanitizeScenarios(input: unknown): Scenario[] {
     }))
 }
 
-/** 读取全部清单与当前激活项；无数据或数据损坏时回退到单份旧数据 */
-export function loadWorkspace(): Workspace {
-  try {
-    const raw = localStorage.getItem(SCENARIOS_KEY)
-    if (!raw) return migrateToWorkspace()
-    const parsed = JSON.parse(raw) as Partial<Workspace>
-    const scenarios = sanitizeScenarios(parsed.scenarios)
-    if (scenarios.length === 0) return migrateToWorkspace()
+/** 读取工作区的结果：区分「正常」「首次使用」「脏数据」，由调用方决定是否迁移 */
+type WorkspaceRead =
+  | { status: 'ok'; workspace: Workspace }
+  | { status: 'empty' }
+  | { status: 'corrupt' }
 
-    const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
-      ? parsed.activeId
-      : scenarios[0].id
-    return { scenarios, activeId }
+/**
+ * 纯读取：只解析 localStorage，不产生任何写入 / 迁移副作用。
+ * 解析失败或结构不可用时，先把原文备份到 corrupt-backup，再返回 corrupt ——
+ * **绝不覆盖原键**：静默覆盖会让用户数据"凭空消失"且无从追溯（见风险卡 R2）。
+ */
+function readWorkspace(): WorkspaceRead {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(SCENARIOS_KEY)
   } catch {
-    return migrateToWorkspace()
+    // 存储被禁用（隐私模式 / 第三方存储拦截）：连读都抛，无法判断内容，按"无数据"降级
+    return { status: 'empty' }
   }
+  if (!raw) return { status: 'empty' }
+
+  let parsed: Partial<Workspace>
+  try {
+    parsed = JSON.parse(raw) as Partial<Workspace>
+  } catch {
+    backupCorrupt(raw)
+    return { status: 'corrupt' }
+  }
+
+  const scenarios = sanitizeScenarios(parsed.scenarios)
+  if (scenarios.length === 0) {
+    backupCorrupt(raw)
+    return { status: 'corrupt' }
+  }
+
+  const activeId = parsed.activeId && scenarios.some((s) => s.id === parsed.activeId)
+    ? parsed.activeId
+    : scenarios[0].id
+  return { status: 'ok', workspace: { scenarios, activeId } }
+}
+
+/**
+ * 读取全部清单与当前激活项：
+ *  - 正常数据 → 直接返回（纯读取，零副作用）
+ *  - 首次使用 → 显式迁移并落盘
+ *  - 脏数据 → 已备份原文，降级为可用工作区但**不覆盖**原键
+ */
+export function loadWorkspace(): Workspace {
+  const read = readWorkspace()
+  if (read.status === 'ok') return read.workspace
+  if (read.status === 'empty') return migrateToWorkspace()
+  return buildMigratedWorkspace()
 }
 
 export function saveWorkspace(ws: Workspace) {
-  const okMain = writeJson(SCENARIOS_KEY, ws)
-  // 主数据没写进去时，单独存 activeId 没有意义；两个键各自负责报告 / 恢复自己的异常
-  if (okMain) write(ACTIVE_KEY, ws.activeId)
+  writeJson(SCENARIOS_KEY, ws)
 }
 
 /* ---------- 工作区备份 / 还原（跨设备搬运 / 防清缓存丢失） ---------- */

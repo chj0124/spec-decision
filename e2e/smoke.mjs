@@ -41,6 +41,33 @@ function startPreview() {
   return child
 }
 
+/**
+ * 启动 Chromium。新克隆的仓库 / CI 冷启动都没有 Playwright 的浏览器缓存，
+ * 此时 `chromium.launch()` 会抛 "Executable doesn't exist"；这里捕获后自动补装一次再重试，
+ * 让 `npm run e2e` 在无缓存环境也能一把通过。
+ * Linux 上同时补系统依赖库（--with-deps），否则浏览器会因缺 libatk 之类直接起不来。
+ */
+async function launchChromium() {
+  const args = ['--no-proxy-server', '--disable-dev-shm-usage']
+  try {
+    return await chromium.launch({ args })
+  } catch (e) {
+    const message = e?.message ?? ''
+    if (!/Executable doesn't exist|playwright install/i.test(message)) throw e
+    console.log('未检测到 Chromium，正在安装（playwright install chromium）…')
+    const installArgs = process.platform === 'linux' ? ['install', '--with-deps', 'chromium'] : ['install', 'chromium']
+    const code = await new Promise((resolve) => {
+      const child = spawn(path.join(ROOT, 'node_modules', '.bin', 'playwright'), installArgs, {
+        cwd: ROOT,
+        stdio: 'inherit',
+      })
+      child.once('exit', (c) => resolve(c ?? 1))
+    })
+    if (code !== 0) throw new Error(`playwright install chromium 失败（exit ${code}）`)
+    return await chromium.launch({ args })
+  }
+}
+
 // 用 TCP 连接探活而不是 fetch：某些环境（本机代理 / 预加载脚本）会让 Node 的全局 fetch
 // 把 localhost 也丢给代理，导致探活永远失败——TCP 层不受影响。
 function probe(host, port, timeoutMs = 1000) {
@@ -145,13 +172,15 @@ async function runSmoke(browser, name, viewport) {
     check(`[${name}] 有数据后「报告」入口可用`, await reportNav.isEnabled())
 
     await reportNav.click()
-    // 报告页懒加载 chunk 到位后才会出现分享按钮
-    await page.getByRole('button', { name: /分享链接|生成中/ }).waitFor({ timeout: STEP_TIMEOUT_MS })
+    // 报告页懒加载 chunk 到位后才会出现工具栏的「导出 / 分享」入口
+    // （分享链接等动作已收进该下拉菜单，不再各占一个按钮）。
+    await page.getByRole('button', { name: /导出 \/ 分享|生成中/ }).first().waitFor({ timeout: STEP_TIMEOUT_MS })
     check(`[${name}] 报告页懒加载并渲染成功`, true)
 
     /* --- 报告导出 PNG（P2-4）：真下载一张图片，验完即弃 --- */
+    await page.getByRole('button', { name: /导出 \/ 分享/ }).first().click()
     const downloadPromise = page.waitForEvent('download', { timeout: STEP_TIMEOUT_MS })
-    await page.getByRole('button', { name: '导出 PNG', exact: true }).click()
+    await page.getByRole('button', { name: '导出 PNG 图片', exact: true }).click()
     const download = await downloadPromise
     const exportFile = path.join(tmpdir(), `e2e-${name}-export.png`)
     await download.saveAs(exportFile)
@@ -219,9 +248,7 @@ async function main() {
       process.exit(1)
     }
 
-    const browser = await chromium.launch({
-      args: ['--no-proxy-server', '--disable-dev-shm-usage'],
-    })
+    const browser = await launchChromium()
     try {
       for (const [name, viewport] of Object.entries(VIEWPORTS)) {
         await runSmoke(browser, name, viewport)

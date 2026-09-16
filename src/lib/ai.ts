@@ -1,5 +1,6 @@
 // 统一 AI 客户端：OpenAI 兼容协议（DeepSeek / 通义 / 智谱 / OpenAI 均兼容）
-// 配置存 localStorage，密钥不离开浏览器。
+// 配置（含密钥）存 localStorage；请求经本站同源代理 /api/ai-chat、/api/ai-models 转发——
+// 密钥会随请求体经过该代理，代理只做校验与转发，不落库、不记录请求体。
 
 export interface AiConfig {
   baseUrl: string // 接口地址，如 https://api.deepseek.com/v1
