@@ -49,6 +49,13 @@ const INT_CELL = /^\d+$/
 /** 带货币符号前缀 */
 const CURRENCY_PREFIX = /^[¥￥$]/
 
+/**
+ * 列类型启发式判断的抽样行数上限。
+ * 粘贴进来的表格通常在几十行以内，抽样不会改变结果；而 10 万行的异常输入若全量拷贝到
+ * `colValues` 会占用大量内存，且没有额外信息量（列类型只看"多数样本"）。
+ */
+const COL_SAMPLE_ROWS = 500
+
 /** 从字符串里提取数值（"¥89.90" → 89.9，"12元" → 12） */
 function toNumber(s: string): number {
   const m = s.replace(/,/g, '').match(/-?\d+(?:\.\d+)?/)
@@ -105,11 +112,17 @@ interface ColInfo {
  * 检测每列的类型：先表头关键词，后内容启发式
  */
 function detectColumns(header: string[] | null, dataRows: string[][]): ColInfo[] {
-  const colCount = Math.max(...dataRows.map((r) => r.length), header?.length ?? 0)
-  const cols: ColInfo[] = []
-  // 各列的所有取值（用于启发式判断）
-  const colValues: string[][] = Array.from({ length: colCount }, () => [])
+  // 用循环求最大列数：Math.max(...dataRows.map(...)) 会把每个元素当作实参压栈，
+  // 10 万行输入会抛 RangeError: Maximum call stack size exceeded。
+  let colCount = header?.length ?? 0
   for (const row of dataRows) {
+    if (row.length > colCount) colCount = row.length
+  }
+  const cols: ColInfo[] = []
+  // 各列的取值样本（用于启发式判断），只取前 COL_SAMPLE_ROWS 行
+  const sample = dataRows.length > COL_SAMPLE_ROWS ? dataRows.slice(0, COL_SAMPLE_ROWS) : dataRows
+  const colValues: string[][] = Array.from({ length: colCount }, () => [])
+  for (const row of sample) {
     for (let i = 0; i < colCount; i++) {
       colValues[i].push(row[i] ?? '')
     }

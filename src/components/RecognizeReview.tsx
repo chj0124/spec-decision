@@ -3,6 +3,7 @@ import type { RecognizedSku, RecognizedDim } from '../lib/recognize'
 import { LOW_CONFIDENCE } from '../lib/recognize'
 import { parseFlavor, parseSpec, buildSpec, inferFlavorLabel } from '../lib/engine'
 import type { ParamType } from '../lib/types'
+import { palette } from '../lib/palette'
 import { AlertCircle, Plus, Trash2, CheckCheck, RotateCcw, Info, Tag, Sliders } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -30,24 +31,6 @@ const PARAM_TYPE_LABEL: Record<ParamType, string> = {
   'boolean': '✓',
   'text': 'A',
 }
-
-/** 口味分组底色调色板：浅色，弱识别度，不影响阅读 */
-const FLAVOR_COLORS = [
-  'bg-sky-100/60 dark:bg-sky-900/20',
-  'bg-amber-100/60 dark:bg-amber-900/20',
-  'bg-emerald-100/60 dark:bg-emerald-900/20',
-  'bg-violet-100/60 dark:bg-violet-900/20',
-  'bg-rose-100/60 dark:bg-rose-900/20',
-  'bg-cyan-100/60 dark:bg-cyan-900/20',
-  'bg-orange-100/60 dark:bg-orange-900/20',
-  'bg-teal-100/60 dark:bg-teal-900/20',
-]
-
-/** 参数维度列分组色条颜色（纯色值，用于 inline style 左侧色条） */
-const GROUP_BAR_COLORS = [
-  '#0ea5e9', '#f59e0b', '#10b981', '#a855f7',
-  '#f43f5e', '#06b6d4', '#f97316', '#14b8a6',
-]
 
 const blank = (): RecognizedSku => ({
   name: '', price: 0, quantity: 0, unit: 'g', packs: 1, confidence: 1,
@@ -141,7 +124,7 @@ export default function RecognizeReview({
   for (const r of rows) {
     const f = parseFlavor(r.name).flavor || ''
     if (f && !flavorColorMap.has(f)) {
-      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
+      flavorColorMap.set(f, palette.flavor[flavorColorIdx % palette.flavor.length])
       flavorColorIdx++
     }
   }
@@ -153,7 +136,7 @@ export default function RecognizeReview({
     for (const r of rows) {
       const v = String(r.params?.[d.label] ?? '')
       if (v && !map.has(v)) {
-        map.set(v, GROUP_BAR_COLORS[idx % GROUP_BAR_COLORS.length])
+        map.set(v, palette.groupBar[idx % palette.groupBar.length])
         idx++
       }
     }

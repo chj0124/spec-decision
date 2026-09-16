@@ -5,7 +5,23 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'node_modules'] },
+  {
+    // JS 侧同样纳入 lint：_worker.js、api/*.js、shared/aiProxyCore.js、e2e/*.mjs
+    // 这些是真正跑在服务端/CI 的代码，之前完全在规则覆盖之外。
+    files: ['**/*.{js,mjs,cjs}'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        // Cloudflare Worker / public/sw.js 的 self、caches、fetch 等
+        ...globals.serviceworker,
+      },
+    },
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

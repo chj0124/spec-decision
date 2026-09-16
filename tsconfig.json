@@ -14,7 +14,13 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    // 显式限定全局类型来源：避免 @types/node 被自动纳入，把浏览器代码里的
+    // process / Buffer 等 Node 全局误判为合法（前端本就该只有 vite/client）。
+    "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Node 侧（Vercel Functions / Cloudflare Worker / e2e / 构建脚本）单独一套配置：
+  // 它们的全局与 lib 与浏览器端相反，混在一起必然互相污染。
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

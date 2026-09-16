@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的新推送取消仍在跑的旧运行，省 runner 也避免"旧结论覆盖新结论"
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # 首屏体积基线：逐产物打印原始 / gzip 体积并给出合计，随每次构建留档。
+      # 这里只做"可见"（不做硬卡构建）—— 真正的告警阈值在 vite 的 chunkSizeWarningLimit；
+      # 体积回归在 CI 日志 / PR 里一眼可比，不必等用户感觉到变慢。
+      - name: size snapshot
+        run: |
+          node --input-type=module -e '
+            import { readdirSync, statSync, readFileSync } from "node:fs";
+            import { gzipSync } from "node:zlib";
+            import { join } from "node:path";
+            const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+              e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]);
+            const rows = walk("dist")
+              .map((p) => ({ p, raw: statSync(p).size, gz: gzipSync(readFileSync(p)).length }))
+              .sort((a, b) => b.raw - a.raw);
+            const kb = (n) => (n / 1024).toFixed(1).padStart(9);
+            console.log("=== dist size snapshot: raw / gzip ===");
+            for (const r of rows) console.log(`${kb(r.raw)} KB  ${kb(r.gz)} KB  ${r.p}`);
+            const sum = (k) => kb(rows.reduce((a, r) => a + r[k], 0));
+            console.log("---");
+            console.log(`TOTAL        ${sum("raw")} KB  ${sum("gz")} KB`);
+          '
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # runner 是干净镜像，没有 Playwright 浏览器缓存； --with-deps 会一并装好系统依赖库
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      # 失败时留档：preview 崩溃与断言失败在日志里长得一样，截图更好定位
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: /tmp/e2e-*.png
+          if-no-files-found: ignore

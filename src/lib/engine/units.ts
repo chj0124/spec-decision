@@ -1,5 +1,11 @@
 import type { Sku } from '../types'
-import { chat } from '../ai'
+
+/**
+ * ⚠️ engine 硬约束：本目录为**纯计算层**，禁止引入任何 IO / 副作用
+ * （不得 import '../ai'、'../store'，不得发网络请求 / 读写 localStorage）。
+ * 需要 IO 的能力（如 AI 生僻单位归一化 aiNormalizeUnit）一律上移到 src/lib/ 下由调用方负责。
+ * 这样 engine 可离线运行、单测无需 mock，且打包可独立 tree-shake。
+ */
 
 /** 单位归一化：把大单位换算到基准小单位，避免 g/kg、ml/L 混算导致单价差千倍 */
 const UNIT_TO_BASE: Record<string, { factor: number; base: string }> = {
@@ -68,32 +74,6 @@ export function normalizeUnit(quantity: number, unit: string): { value: number; 
 export function isKnownUnit(unit: string): boolean {
   const u = (unit || '').trim()
   return Boolean(UNIT_TO_BASE[u] ?? UNIT_TO_BASE[u.toLowerCase()])
-}
-
-/**
- * 用 AI 把生僻单位归一化到基准单位（g/ml/cm/个）。
- * 仅在本地表查不到时调用；失败返回 null，调用方回退原样处理。
- */
-export async function aiNormalizeUnit(
-  quantity: number,
-  unit: string,
-): Promise<{ value: number; base: string } | null> {
-  try {
-    const text = await chat(
-      `把 ${quantity} "${unit}" 换算成对应的基准单位数值。` +
-        `重量用 g、体积用 ml、长度用 cm、计件用"个"。` +
-        `只返回 JSON，格式 {"value":数字,"base":"g|ml|cm|个"}，不要任何其他文字。` +
-        `如果该单位不属于重量/体积/长度/计件，或无法换算，返回 {"value":null}。`,
-      '你是单位换算器，只输出 JSON。',
-    )
-    const m = text.replace(/```json|```/g, '').match(/\{[\s\S]*\}/)
-    if (!m) return null
-    const data = JSON.parse(m[0])
-    if (typeof data.value === 'number' && data.base) return { value: data.value, base: data.base }
-    return null
-  } catch {
-    return null
-  }
 }
 
 /** 检测一批 SKU 是否存在"基准单位不一致、无法直接比价"的情况，返回警告文案或 null */

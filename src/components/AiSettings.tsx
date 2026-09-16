@@ -274,8 +274,8 @@ export default function AiSettings({ open, config, onSave, onClose }: Props) {
             <div className="mt-5 rounded-xl bg-brand-soft/60 border border-edge p-3 flex gap-2">
               <ShieldCheck className="h-4 w-4 text-brand shrink-0 mt-0.5" />
               <p className="text-sm text-slate-500 leading-relaxed">
-                密钥仅保存在你的浏览器 localStorage，直接由浏览器发往你配置的服务商，不经过任何第三方服务器。
-                清除浏览器数据会一并删除。
+                密钥只保存在你的浏览器 localStorage，请求经本站同源代理转发给你配置的服务商
+                （代理仅做校验与转发，不落库、不记录请求体）。清除浏览器数据会一并删除。
               </p>
             </div>
 

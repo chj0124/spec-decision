@@ -1,5 +1,5 @@
 import type { ComputedSku, ParamValue, Preference, SkuCluster } from '../types'
-import { round, fmt } from './util'
+import { round, fmt, minOf, maxOf } from './util'
 
 /**
  * 把「quantity × packs × unit 相同、且参数维度也相同」的规格归为一簇——
@@ -31,9 +31,9 @@ export function clusterItems(items: ComputedSku[]): SkuCluster[] {
     const sortedMembers = [...members].sort((a, b) => a.unitPrice - b.unitPrice)
     const rep = sortedMembers[0] // 簇内最省钱者作为决策代表
     const prices = members.map((m) => m.price)
-    const minPrice = Math.min(...prices)
-    const maxPrice = Math.max(...prices)
-    const score = Math.max(...members.map((m) => m.score))
+    const minPrice = minOf(prices)
+    const maxPrice = maxOf(prices)
+    const score = maxOf(members.map((m) => m.score))
     const label = `${fmt.num(rep.quantity)}${rep.unit} × ${rep.packs}${rep.packUnit || '件'}`
 
     clusters.push({
