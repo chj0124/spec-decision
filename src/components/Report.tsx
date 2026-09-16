@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, MarginInsight, WarningPair } from '../lib/types'
-import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice } from '../lib/engine'
+import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice, marginAnalysis } from '../lib/engine'
 import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
@@ -81,6 +81,43 @@ const packWord = (packs: number, packUnit?: string): string =>
 /** 列表级每件量词：取列表里实际出现过的量词，没有则回退 */
 const listPackWord = (items: ComputedSku[]): string =>
   items.find((i) => i.packUnit)?.packUnit || (items.some((i) => i.packs > 1) ? '包' : '件')
+
+/** 各决策偏好的静态说明（悬停在切换按钮上时显示） */
+const PREFERENCE_HINT: Record<Preference, string> = {
+  value: '只看每单位单价，最便宜的排第 1，参数不参与排名',
+  score: '价格分 × 价格权重 + 各参数维度分 × 参数权重，加权总分高的排第 1',
+  budget: '先过滤掉总价超预算的规格，再按综合得分排名',
+}
+
+/**
+ * 决策偏好的动态提示（显示在偏好按钮组正下方）：说清「当前数据下」各偏好会不会排出不同名次。
+ * - 预算优先：行为直观（过滤超预算再按得分排），不需要提示 → null
+ * - 没配参数维度，或配了但所有规格取值都相同 → 综合得分退化为价格分，
+ *   「性价比优先」与「综合得分优先」排名完全一致（用户点击看不到变化的原因）；
+ * - 有参数差异 → 提示当前价格 / 参数的权重侧重。
+ */
+function buildPreferenceHint(
+  items: ComputedSku[],
+  config: DecisionConfig,
+  current: Preference,
+): string | null {
+  if (current === 'budget') return null
+  // 有实际区分度的参数维度：至少两个规格在该维度上取值不同
+  const effectiveDims = config.dims.filter((d) => {
+    const vals = items.map((i) => i.params?.[d.id])
+    const present = vals.filter((v) => v !== undefined)
+    if (present.length < 1) return false
+    return new Set(present.map(String)).size > 1
+  })
+  if (effectiveDims.length === 0) {
+    return '当前清单未配置有差异的参数维度，切换偏好不会改变排名'
+  }
+  const dimW = effectiveDims.reduce((s, d) => s + Math.max(0, d.weight), 0)
+  const priceW = Math.max(0, config.priceWeight)
+  const focus =
+    priceW > dimW * 1.5 ? '价格主导' : dimW > priceW * 1.5 ? '参数主导' : '价格参数并重'
+  return `综合得分 = 价格 ${priceW}% + 参数 ${dimW}% 加权（${focus}）`
+}
 
 /**
  * 因超预算被排除的规格清单：逐条列出规格名、总价与超出预算的金额。
@@ -247,58 +284,54 @@ function splitWarnText(text: string): { lead: string; detail: string } {
   return { lead: strip(text.slice(0, i)), detail: text.slice(i + 1) }
 }
 
-/* ============ 避坑对照的图形标注：五种画法（都做出来，比较后再做减法） ============ */
+/**
+ * SVG <text> 不会自动换行，这里按「可用宽度（以字宽 em 计）」手工折行：
+ * CJK 字符记 1 个字宽，ASCII 记 0.55，逐字累加、超宽即断行。
+ */
+function wrapCjk(text: string, maxEm: number): string[] {
+  const widthOf = (ch: string) => (/[\u2e80-\ufeff]/.test(ch) ? 1 : 0.55)
+  const lines: string[] = []
+  let cur = ''
+  let w = 0
+  for (const ch of text) {
+    const cw = widthOf(ch)
+    if (w + cw > maxEm && cur) {
+      lines.push(cur)
+      cur = ch
+      w = cw
+    } else {
+      cur += ch
+      w += cw
+    }
+  }
+  if (cur) lines.push(cur)
+  return lines
+}
 
-/** 避坑标注样式：差额箭头 / 右缘括线 / 行高亮 / 差值段 / 同号徽标 */
-type WarnStyle = 'arrow' | 'bracket' | 'band' | 'delta' | 'badge'
+/* ============ 避坑对照的图形标注：行高亮 + 差值段 + 右缘括线 三合一 ============ */
 
-/** 样式切换器候选（顺序 = 展示顺序）；caption 用于避坑提示标题后的说明 */
-const WARN_STYLE_OPTIONS: Array<{ k: WarnStyle; label: string; hint: string; caption: string }> = [
-  { k: 'arrow', label: '差额箭头', hint: '像经济学图那样：两条横条各拉一条虚线引导到坐标轴，轴边用一根双向箭头量出「贵出来的这一段」，中间铺一块阴影差值带，箭头旁边写清贵了多少。', caption: '图上双向箭头量出的那段阴影就是贵出来的差额' },
-  { k: 'bracket', label: '右缘括线', hint: '在图右侧用一个括线把被对照的两条横条框在一起，编号挂在括线中间。', caption: '图上右侧括线框住的正是被对照的两条规格' },
-  { k: 'band', label: '行高亮', hint: '把被对照的两条横条整行铺一层淡黄底，像表格里高亮那两行。', caption: '图上铺了淡黄底的两行正是被对照的规格' },
-  { k: 'delta', label: '差值段', hint: '在较贵那条上标出「比便宜那条多出来的这一截」，并标清贵了多少。', caption: '图上粗黄段标出了贵出来的那一截' },
-  { k: 'badge', label: '同号徽标', hint: '不画线，只在两条横条右侧的空白里各挂一个同号徽标，与下方文字对号入座。', caption: '两条同号徽标指的就是被对照的规格' },
-]
-
-/** 图例里的小标记：与当前避坑标注画法保持一致 */
-function WarnLegendMark({ warnStyle, color }: { warnStyle: WarnStyle; color: string }) {
-  if (warnStyle === 'arrow') {
-    return (
-      <svg width="20" height="10" viewBox="0 0 20 10" className="inline-block align-middle">
-        <rect x="4" y="1" width="12" height="8" rx="1" fill={color} opacity="0.22" stroke={color} strokeOpacity="0.5" strokeWidth="0.8" strokeDasharray="2 2" />
-        <line x1="4" y1="5" x2="16" y2="5" stroke={color} strokeWidth="1.4" />
-        <path d="M4 5 L7 3.4 L7 6.6 Z" fill={color} />
-        <path d="M16 5 L13 3.4 L13 6.6 Z" fill={color} />
-      </svg>
-    )
-  }
-  if (warnStyle === 'band') {
-    return <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color, opacity: 0.35 }} />
-  }
-  if (warnStyle === 'delta') {
-    return <span className="inline-block w-4 h-1.5 rounded-full" style={{ background: color }} />
-  }
-  if (warnStyle === 'badge') {
-    return (
-      <span
-        className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[8px] font-bold text-white"
-        style={{ background: color }}
-      >
-        1
-      </span>
-    )
-  }
-  return <span className="inline-block w-2 h-3.5 border-y-2 border-r-2 border-l-0 rounded-r-sm" style={{ borderColor: color }} />
+/** 图例里的小标记：淡黄行底 + 粗黄差值段 + 右缘括线，与图上的三合一标注一致 */
+function WarnLegendMark({ color }: { color: string }) {
+  return (
+    <svg width="26" height="12" viewBox="0 0 26 12" className="inline-block align-middle">
+      {/* 行高亮 */}
+      <rect x="0" y="0" width="20" height="12" rx="2" fill={color} opacity={0.16} />
+      {/* 差值段 */}
+      <rect x="11" y="4.5" width="9" height="3" rx="1.5" fill={color} />
+      {/* 右缘括线 */}
+      <path d="M21 2 H24 V10 H21" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
 }
 
 /** Customized 覆盖层能拿到的 recharts 图表内部状态（只声明用得到的字段） */
 interface WarnOverlayProps {
-  warnStyle?: WarnStyle
   warnRows?: SpecRow[]
   warnKey?: keyof Pick<SpecRow, 'perUnit' | 'per100' | 'savings'>
   warnPairs?: WarningPair[]
   warnTheme?: ChartTheme
+  /** 图右侧为避坑标注预留的宽度（= BarChart 的 margin.right），用于给编号旁的注文折行、防裁切 */
+  warnRightRoom?: number
   xAxisMap?: Record<string, { scale?: (v: number) => number }>
   yAxisMap?: Record<string, { scale?: (v: string) => number; bandSize?: number }>
   offset?: { top: number; left: number; width: number; height: number }
@@ -308,14 +341,15 @@ interface WarnOverlayProps {
  * 避坑对照的图形标注（替代原先那条横穿整张图的长斜虚线）。
  * 借 recharts 的 <Customized> 拿到图表内部坐标（xAxisMap / yAxisMap 的 scale + offset），
  * 于是能精确落到每条横条的柱端，把"哪两条被对照"画得干净、不穿越其它柱子。
- * 四种画法共用同一份坐标，靠 warnStyle 切换。
+ * 三合一画法：被对照的两行铺淡黄底（行高亮），较贵那条上标出多出来的一截（差值段），
+ * 右缘再用括线把两条收在一起、挂上编号（右缘括线），编号旁直接写清这条避坑提示。
  */
 function WarnOverlay({
-  warnStyle = 'bracket',
   warnRows = [],
   warnKey = 'perUnit',
   warnPairs = [],
   warnTheme,
+  warnRightRoom = 120,
   xAxisMap,
   yAxisMap,
   offset,
@@ -359,83 +393,32 @@ function WarnOverlay({
         // 多组对照各自占一条"竖向泳道"，编号也顺次右移，避免几组叠在同一竖线上看着像连成一条
         const laneX = spineX + i * 22
         const badgeX = laneX + 14
+        // 编号旁的注文：粗体结论 + 灰色细节，按右侧留白折行（svg 右缘 ≈ 绘图区右缘 + margin.right）
+        const { lead, detail } = splitWarnText(p.text)
+        const noteFontSize = 10.5
+        const noteX = badgeX + 13
+        const noteRightEdge = plotRight + warnRightRoom
+        const maxEm = Math.max(6, (noteRightEdge - noteX - 2) / noteFontSize)
+        const leadLines = wrapCjk(lead, maxEm)
+        const detailLines = detail ? wrapCjk(detail, maxEm) : []
+        const noteLineHeight = 14
+        const noteTotalH = (leadLines.length + detailLines.length) * noteLineHeight
+        const noteStartY = midY - noteTotalH / 2 + noteLineHeight / 2
 
-        if (warnStyle === 'arrow') {
-          // 把"差额"当成坐标轴上的一个量来标注：轴下留白由 MainVisual 加高 bottom 提供
-          const axisY = offset.top + offset.height
-          const bandTop = Math.min(yA, yB) - bandSize / 2
-          const bandBottom = Math.max(yA, yB) + bandSize / 2
-          const arrowY = axisY + 48
-          const head = 5
-          return (
-            <g key={`warn-${i}`}>
-              {/* 两条横条之间铺一块虚线阴影带：横向只占"贵出来的这一段" */}
-              <rect
-                x={lo}
-                y={bandTop}
-                width={Math.max(hi - lo, 1)}
-                height={bandBottom - bandTop}
-                rx={3}
-                fill={amber}
-                fillOpacity={0.13}
-                stroke={amber}
-                strokeOpacity={0.5}
-                strokeWidth={1}
-                strokeDasharray="3 3"
-              />
-              {/* 从阴影带下沿各引一条虚线到坐标轴，充当读数引导线 */}
-              <line x1={lo} y1={bandBottom} x2={lo} y2={axisY} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
-              <line x1={hi} y1={bandBottom} x2={hi} y2={axisY} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
-              {/* 轴边一根双向箭头量出这段差额，旁边写清贵了多少 */}
-              <line x1={lo} y1={arrowY} x2={hi} y2={arrowY} stroke={amber} strokeWidth={1.6} />
-              <path d={`M ${lo} ${arrowY} L ${lo + head} ${arrowY - head * 0.7} L ${lo + head} ${arrowY + head * 0.7} Z`} fill={amber} />
-              <path d={`M ${hi} ${arrowY} L ${hi - head} ${arrowY - head * 0.7} L ${hi - head} ${arrowY + head * 0.7} Z`} fill={amber} />
-              <text x={(lo + hi) / 2} y={arrowY + 15} textAnchor="middle" fill={amber} fontSize={12} fontWeight={700}>
-                {`贵 ${p.pct}%`}
-              </text>
-              {badge(badgeX, midY, no)}
-            </g>
-          )
-        }
-
-        if (warnStyle === 'badge') {
-          return (
-            <g key={`warn-${i}`}>
-              {badge(badgeX, yA, no)}
-              {badge(badgeX, yB, no)}
-            </g>
-          )
-        }
-
-        if (warnStyle === 'band') {
-          return (
-            <g key={`warn-${i}`}>
-              <rect x={plotLeft} y={yScale(a.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
-              <rect x={plotLeft} y={yScale(b.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
-              {badge(badgeX, midY, no)}
-            </g>
-          )
-        }
-
-        if (warnStyle === 'delta') {
-          return (
-            <g key={`warn-${i}`}>
-              {/* 便宜那条的柱端拉一条竖直虚线过去，充当"基准线" */}
-              <line x1={xB} y1={yB} x2={xB} y2={yA} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
-              {/* 贵那条上"多出来的一截" */}
-              <line x1={lo} y1={yA} x2={hi} y2={yA} stroke={amber} strokeWidth={6} strokeLinecap="round" />
-              <circle cx={hi} cy={yA} r={4} fill={amber} />
-              <text x={(lo + hi) / 2} y={yA - 13} textAnchor="middle" fill={amber} fontSize={11} fontWeight={700}>
-                {`贵 ${p.pct}%`}
-              </text>
-              {badge(badgeX, yA, no)}
-            </g>
-          )
-        }
-
-        // bracket（默认）：右缘一个把两条横条"收"在一起的括线
         return (
           <g key={`warn-${i}`}>
+            {/* 行高亮：被对照的两行整行铺一层淡黄底 */}
+            <rect x={plotLeft} y={yScale(a.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+            <rect x={plotLeft} y={yScale(b.name)} width={offset.width} height={bandSize} rx={8} fill={amber} fillOpacity={0.16} />
+            {/* 差值段：便宜那条的柱端拉一条竖直虚线过去，充当"基准线" */}
+            <line x1={xB} y1={yB} x2={xB} y2={yA} stroke={amber} strokeWidth={1} strokeDasharray="3 3" opacity={0.6} />
+            {/* 贵那条上"多出来的一截"，并标清贵了多少 */}
+            <line x1={lo} y1={yA} x2={hi} y2={yA} stroke={amber} strokeWidth={6} strokeLinecap="round" />
+            <circle cx={hi} cy={yA} r={4} fill={amber} />
+            <text x={(lo + hi) / 2} y={yA - 13} textAnchor="middle" fill={amber} fontSize={11} fontWeight={700}>
+              {`贵 ${p.pct}%`}
+            </text>
+            {/* 右缘括线：把两条横条"收"在一起 */}
             <path
               d={`M ${laneX - 11} ${yA} H ${laneX} V ${yB} H ${laneX - 11}`}
               fill="none"
@@ -444,9 +427,20 @@ function WarnOverlay({
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-            <circle cx={xA} cy={yA} r={3.5} fill={amber} />
-            <circle cx={xB} cy={yB} r={3.5} fill={amber} />
             {badge(badgeX, midY, no)}
+            {/* 编号旁的注文：这条避坑提示直接标在图上，不必再去图下找编号 */}
+            <text x={noteX} y={noteStartY} fontSize={noteFontSize} dominantBaseline="central">
+              {leadLines.map((l, j) => (
+                <tspan key={`wl-${j}`} x={noteX} dy={j === 0 ? 0 : noteLineHeight} fill={amber} fontWeight={700}>
+                  {l}
+                </tspan>
+              ))}
+              {detailLines.map((l, j) => (
+                <tspan key={`wd-${j}`} x={noteX} dy={noteLineHeight} fill={warnTheme.tick}>
+                  {l}
+                </tspan>
+              ))}
+            </text>
           </g>
         )
       })}
@@ -463,7 +457,7 @@ function WarnOverlay({
  * 冠军条统一高亮，其余中性色。
  */
 function MainVisual({
-  kind, rows, unitLabel, anchorId, theme, warningPairs, warnStyle,
+  kind, rows, unitLabel, anchorId, theme, warningPairs,
 }: {
   kind: VisualKind
   rows: SpecRow[]
@@ -472,9 +466,19 @@ function MainVisual({
   theme: ChartTheme
   /** 需要连线对照的避坑提示（带两条规格 id），在主视觉里标出被对照的两条横条 */
   warningPairs: WarningPair[]
-  /** 避坑对照的图形标注样式（右缘括线 / 行高亮 / 差值段 / 同号徽标） */
-  warnStyle: WarnStyle
 }) {
+  // 跟踪图表容器宽度：右侧要给「括线 + 编号 + 编号旁的注文」留白，窄屏少留、靠折行兜底
+  const boxRef = useRef<HTMLDivElement>(null)
+  const [boxWidth, setBoxWidth] = useState(0)
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    const ro = new ResizeObserver((es) => setBoxWidth(es[0].contentRect.width))
+    ro.observe(el)
+    return () => ro.disconnect()
+    // kind 切换会换一个容器 div（象限图 / 横条图两个分支），重新挂一次观察器
+  }, [kind])
+
   const tooltipProps = {
     contentStyle: theme.tooltipStyle,
     labelStyle: theme.tooltipLabelStyle,
@@ -554,13 +558,15 @@ function MainVisual({
   )
   const avg = data.reduce((s, r) => s + r[dataKey], 0) / Math.max(1, data.length)
   const chartHeight = Math.max(220, data.length * 40 + 60)
+  // 右侧留白：括线 + 编号 + 编号旁的避坑注文；窄屏（<640px）少留一点，注文靠折行兜底
+  const warnRightRoom = warningPairs.length
+    ? (boxWidth > 0 && boxWidth < 640 ? 132 : 205) + (warningPairs.length - 1) * 22
+    : 72
 
-  // 差额箭头画法要把"贵出来的一段"标在坐标轴外侧，轴下需要额外留白
-  const needsAxisRoom = warnStyle === 'arrow' && warningPairs.length > 0
   return (
-    <div style={{ height: chartHeight }}>
+    <div ref={boxRef} style={{ height: chartHeight }}>
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warningPairs.length ? 100 + (warningPairs.length - 1) * 26 : 72, bottom: needsAxisRoom ? 84 : 24, left: 4 }} barCategoryGap={12}>
+        <BarChart layout="vertical" data={data} margin={{ top: 8, right: warnRightRoom, bottom: 24, left: 4 }} barCategoryGap={12}>
           <CartesianGrid strokeDasharray="3 3" stroke={theme.grid} horizontal={false} />
           <XAxis
             type="number"
@@ -579,14 +585,14 @@ function MainVisual({
           {kind === 'price' && (
             <ReferenceLine x={avg} stroke={theme.tick} strokeDasharray="4 4" label={{ value: '平均', position: 'top', fill: theme.tick, fontSize: 10 }} />
           )}
-          {/* 避坑对照：把被对照的两条横条标出来（四种画法，靠 warnStyle 切换） */}
+          {/* 避坑对照：行高亮 + 差值段 + 右缘括线，把被对照的两条横条标出来 */}
           <Customized
             component={WarnOverlay}
-            warnStyle={warnStyle}
             warnRows={data}
             warnKey={dataKey}
             warnPairs={warningPairs}
             warnTheme={theme}
+            warnRightRoom={warnRightRoom}
           />
           <Bar dataKey={dataKey} name={seriesName} radius={[0, 6, 6, 0]} maxBarSize={24}
             label={(props: { x?: number; y?: number; width?: number; height?: number; value?: number }) => {
@@ -727,6 +733,8 @@ function BudgetInput({
 export default function Report({ result, config, unitWarning, onBack, onPreferenceChange, onBudgetChange, getShareUrl }: Props) {
   const { items, best, margins, warningPairs, warningNotes, reasons, clusters, hasVariants } = result
   const chartTheme = useChartTheme()
+  // 决策偏好动态提示：说清当前数据下各偏好的排名差异（为什么点了没变化 / 权重侧重在哪）
+  const preferenceHint = buildPreferenceHint(items, config, config.preference)
   // 冠军规格的价格走势：跨天变过价（≥2 条记录）时才有，用于提示"现在买是不是比上次贵"
   const bestTrend = priceTrend(best?.priceHistory)
   const TrendIcon = bestTrend?.direction === 'up' ? TrendingUp : bestTrend?.direction === 'down' ? TrendingDown : Minus
@@ -759,6 +767,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
   // 复制决策摘要到剪贴板（2 秒后恢复按钮文案）
   const [copied, setCopied] = useState(false)
+  // 导出 / 分享下拉菜单开关
+  const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const copySummary = async () => {
     const text = buildSummaryText(result, config)
     if (!text) return
@@ -813,12 +823,27 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
   // 主视觉类型：四种候选编码方式，默认「每单位单价」最直接
   const [visual, setVisual] = useState<VisualKind>('price')
-  // 避坑对照的图形标注样式：五种候选画法，默认「差额箭头」（参考经济学图的作图和批注方式）
-  const [warnStyle, setWarnStyle] = useState<WarnStyle>('arrow')
+  // 升档基准档：null = 默认逐档相邻对比；选中某个规格 id 后，所有更大档都直接与它比
+  const [marginBaseId, setMarginBaseId] = useState<string | null>(null)
   // 逐档明细表默认收起：升档卡片已把结论说完，明细按需展开
   const [showMarginTable, setShowMarginTable] = useState(false)
   // 完整排名表默认收起：报告先给结论，明细按需展开
   const [showDetail, setShowDetail] = useState(false)
+
+  // 升档基准档候选：与 marginAnalysis 同源（同价同规格已合并、按总量升序）
+  const marginTiers = useMemo(
+    () => mergeVariantSkus(items).sort((a, b) => a.totalQuantity - b.totalQuantity),
+    [items],
+  )
+  // 当前基准下的升档结论：默认逐档相邻对比；选了基准档则所有更大档与它直接比
+  const sectionMargins = useMemo(
+    () => marginAnalysis(items, marginBaseId ?? undefined),
+    [items, marginBaseId],
+  )
+  // 数据更新后选中的基准档可能已不存在（被删除 / 识别换了一批），自动退回默认逐档对比
+  useEffect(() => {
+    if (marginBaseId && !marginTiers.some((t) => t.id === marginBaseId)) setMarginBaseId(null)
+  }, [marginTiers, marginBaseId])
 
   // 全量视图分组折叠：与工作台一致的工具栏 + 可点击分组标题行
   const [groupBy, setGroupBy] = useState<FullGroupBy | null>(null)
@@ -955,13 +980,12 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     { k: 'savings', label: '省下多少钱', hint: '相比全场最贵单价、按本档总量折算，选这一档实际省下的金额（元）。' },
   ]
   const activeVisual = VISUAL_OPTIONS.find((o) => o.k === visual) ?? VISUAL_OPTIONS[0]
-  const activeWarnStyle = WARN_STYLE_OPTIONS.find((o) => o.k === warnStyle) ?? WARN_STYLE_OPTIONS[0]
   // 图注：把「这张图怎么读」压成一句话，紧跟在图下的避坑注释之后
   const figureNote =
     visual === 'quadrant'
       ? '横轴是总量、纵轴是单位成本，越靠左下越划算，连线即逐档升档路径。'
       : warningPairs.length > 0
-        ? `横条越长代表单价越高。${activeWarnStyle.caption}，编号与下面每一条一一对应。`
+        ? '横条越长代表单价越高。铺了淡黄底、画了差值段和右缘括线的两行正是被对照的规格，编号旁的注文即对应的避坑提示。'
         : '横条越长代表单价越高，虚线是全场平均价。'
 
   return (
@@ -976,78 +1000,103 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             <ArrowLeft className="h-4 w-4" /> 返回编辑
           </button>
           <span className="text-edge">|</span>
-          {/* 导出：PNG 图片（整页栅格化）+ 打印为 PDF（浏览器打印对话框，配合打印样式）+ 复制纯文本摘要 */}
-          <button
-            onClick={exportPng}
-            disabled={exporting}
-            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print disabled:opacity-60"
-            title="把整份报告导出成一张 PNG 图片，适合直接发到聊天工具 / 存图留档"
-          >
-            {exporting
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> 生成中…</>
-              : <><ImageDown className="h-4 w-4" /> 导出 PNG</>}
-          </button>
-          <button
-            onClick={() => window.print()}
-            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
-            title="调起浏览器打印对话框，可另存为 PDF（已隐藏页头页脚与按钮，只打印报告内容）"
-          >
-            <Printer className="h-4 w-4" /> 打印 / PDF
-          </button>
-          <button
-            onClick={copySummary}
-            className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
-            title="复制纯文本决策摘要（推荐规格、排名、超预算排除说明、边际效益与避坑提示）到剪贴板"
-          >
-            {copied
-              ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">已复制</span></>
-              : <><Copy className="h-4 w-4" /> 复制摘要</>}
-          </button>
-          {getShareUrl && (
+          {/* 导出 / 分享：四个动作收进一个下拉菜单，工具栏只留一个入口 */}
+          <div className="relative no-print">
             <button
-              onClick={copyShareLink}
-              disabled={sharing}
-              className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print disabled:opacity-60"
-              title="生成只读分享链接（清单与配置压缩进 URL，不含任何服务器）并复制到剪贴板"
+              onClick={() => setShareMenuOpen((v) => !v)}
+              className="text-sm text-slate-400 hover:text-brand transition-colors inline-flex items-center gap-1.5"
+              title="导出图片 / 打印 PDF / 复制文字摘要 / 生成分享链接"
             >
-              {shareCopied
-                ? <><Check className="h-4 w-4 text-emerald-500" /> <span className="text-emerald-500">链接已复制</span></>
-                : <><Share2 className="h-4 w-4" /> {sharing ? '生成中…' : '分享链接'}</>}
+              {exporting || sharing
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <Share2 className="h-4 w-4" />}
+              {exporting ? '生成中…' : sharing ? '生成中…' : '导出 / 分享'}
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${shareMenuOpen ? 'rotate-180' : ''}`} />
             </button>
-          )}
+            {shareMenuOpen && (
+              <>
+                {/* 透明遮罩：点菜单外任意处关闭 */}
+                <div className="fixed inset-0 z-30" onClick={() => setShareMenuOpen(false)} />
+                <div className="absolute left-0 top-full mt-1.5 z-40 w-60 rounded-xl border border-edge bg-white dark:bg-slate-800 shadow-xl py-1.5">
+                  <button
+                    onClick={() => { setShareMenuOpen(false); exportPng() }}
+                    disabled={exporting}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-brand-soft/40 dark:hover:bg-slate-700/60 transition-colors text-left disabled:opacity-60"
+                    title="把整份报告导出成一张 PNG 图片，适合直接发到聊天工具 / 存图留档"
+                  >
+                    <ImageDown className="h-4 w-4 shrink-0" /> 导出 PNG 图片
+                  </button>
+                  <button
+                    onClick={() => { setShareMenuOpen(false); window.print() }}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-slate-600 dark:text-slate-300 hover:bg-brand-soft/40 dark:hover:bg-slate-700/60 transition-colors text-left"
+                    title="调起浏览器打印对话框，可另存为 PDF（已隐藏页头页脚与按钮，只打印报告内容）"
+                  >
+                    <Printer className="h-4 w-4 shrink-0" /> 打印 / 存为 PDF
+                  </button>
+                  <button
+                    onClick={() => { copySummary(); setTimeout(() => setShareMenuOpen(false), 1400) }}
+                    className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left transition-colors"
+                    title="复制纯文本决策摘要（推荐规格、排名、超预算排除说明、边际效益与避坑提示）到剪贴板"
+                  >
+                    {copied
+                      ? <><Check className="h-4 w-4 shrink-0 text-emerald-500" /> <span className="text-emerald-500">已复制到剪贴板</span></>
+                      : <><Copy className="h-4 w-4 shrink-0 text-slate-600 dark:text-slate-300" /> <span className="text-slate-600 dark:text-slate-300">复制文字摘要</span></>}
+                  </button>
+                  {getShareUrl && (
+                    <button
+                      onClick={() => { copyShareLink(); setTimeout(() => setShareMenuOpen(false), 1400) }}
+                      disabled={sharing}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-left transition-colors disabled:opacity-60"
+                      title="生成只读分享链接（清单与配置压缩进 URL，不含任何服务器）并复制到剪贴板"
+                    >
+                      {shareCopied
+                        ? <><Check className="h-4 w-4 shrink-0 text-emerald-500" /> <span className="text-emerald-500">链接已复制</span></>
+                        : <><Share2 className="h-4 w-4 shrink-0 text-slate-600 dark:text-slate-300" /> <span className="text-slate-600 dark:text-slate-300">{sharing ? '生成中…' : '复制分享链接'}</span></>}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* 决策偏好切换 */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-slate-500">决策偏好：</span>
-          <div className="flex rounded-lg border border-edge overflow-hidden">
-            {([
-              { key: 'value', label: '性价比优先' },
-              { key: 'score', label: '综合得分优先' },
-              { key: 'budget', label: '预算优先' },
-            ] as { key: Preference; label: string }[]).map((opt) => (
-              <button
-                key={opt.key}
-                onClick={() => onPreferenceChange(opt.key)}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                  config.preference === opt.key
-                    ? 'bg-brand/15 text-brand'
-                    : 'text-slate-400 hover:text-brand-deep'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          {config.preference === 'budget' && (
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-slate-500">预算</span>
-              <BudgetInput
-                value={config.budget}
-                onChange={onBudgetChange}
-                className="field py-1 text-xs w-20 tabular"
-              />
+        {/* 决策偏好切换：提示紧贴按钮组正下方，明确它说的就是这组偏好 */}
+        <div className="flex flex-col items-start sm:items-end gap-1.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-500">决策偏好：</span>
+            <div className="flex rounded-lg border border-edge overflow-hidden">
+              {([
+                { key: 'value', label: '性价比优先' },
+                { key: 'score', label: '综合得分优先' },
+                { key: 'budget', label: '预算优先' },
+              ] as { key: Preference; label: string }[]).map((opt) => (
+                <button
+                  key={opt.key}
+                  onClick={() => onPreferenceChange(opt.key)}
+                  title={PREFERENCE_HINT[opt.key]}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    config.preference === opt.key
+                      ? 'bg-brand/15 text-brand'
+                      : 'text-slate-400 hover:text-brand-deep'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
+            {config.preference === 'budget' && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-slate-500">预算</span>
+                <BudgetInput
+                  value={config.budget}
+                  onChange={onBudgetChange}
+                  className="field py-1 text-xs w-20 tabular"
+                />
+              </div>
+            )}
+          </div>
+          {preferenceHint && (
+            <p className="text-xs text-slate-400">{preferenceHint}</p>
           )}
         </div>
       </div>
@@ -1272,29 +1321,6 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           </div>
           <p className="text-xs text-slate-500 mb-4">{activeVisual.hint}</p>
 
-          {/* 避坑标注样式切换：四种画法都做出来，比较后再做减法 */}
-          {visual !== 'quadrant' && warningPairs.length > 0 && (
-            <div className="mb-4 rounded-xl border border-edge bg-brand-soft/20 p-3">
-              <div className="flex items-center gap-2 flex-wrap text-xs">
-                <span className="text-slate-500">避坑标注：</span>
-                {WARN_STYLE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.k}
-                    onClick={() => setWarnStyle(opt.k)}
-                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
-                      warnStyle === opt.k
-                        ? 'bg-amber-400/20 text-amber-600 dark:text-amber-400 border border-amber-400/50'
-                        : 'text-slate-400 hover:text-amber-600 border border-edge'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-2 text-xs text-slate-500">{activeWarnStyle.hint}</p>
-            </div>
-          )}
-
           <div className="rounded-xl border border-edge bg-brand-soft/20 p-4">
             <MainVisual
               kind={visual}
@@ -1303,15 +1329,14 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               anchorId={visualAnchorId}
               theme={chartTheme}
               warningPairs={warningPairs}
-              warnStyle={warnStyle}
             />
           </div>
 
-          {/* 图-caption：紧贴图下方，把避坑提示写成这张图的注释（粗体结论 + 灰色细节），再附图注与图例 */}
+          {/* 图-caption：避坑注文已直接标在横条图编号旁；象限图放不下覆盖层，编号说明保留在这里，另附零散提示 / 图注 / 图例 */}
           <div className="mt-3 px-1">
-            {(warningPairs.length > 0 || warningNotes.length > 0) && (
+            {((visual === 'quadrant' && warningPairs.length > 0) || warningNotes.length > 0) && (
               <div className="space-y-2.5">
-                {warningPairs.map((p, i) => {
+                {visual === 'quadrant' && warningPairs.map((p, i) => {
                   const { lead, detail } = splitWarnText(p.text)
                   return (
                     <div key={`pair-${i}`} className="flex items-start gap-2">
@@ -1361,8 +1386,8 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
               )}
               {visual !== 'quadrant' && warningPairs.length > 0 && (
                 <span className="inline-flex items-center gap-1">
-                  <WarnLegendMark warnStyle={warnStyle} color={chartTheme.series.margin} />
-                  避坑对照（编号见下）
+                  <WarnLegendMark color={chartTheme.series.margin} />
+                  避坑对照（注文见图上编号旁）
                 </span>
               )}
               <span className="text-slate-400 dark:text-slate-500">· 已合并同价同规格的口味变体 · 按总量升序 = 升档顺序</span>
@@ -1377,16 +1402,45 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
           <h3 className="text-lg font-bold tracking-tight mb-1 flex items-center gap-2">
             <TrendingUp className="h-5 w-5 text-brand" /> 升档值不值
           </h3>
-          <p className="text-xs text-slate-500 mb-4">
-            按总量从小到大逐档比较：<b className="text-slate-600">净省（白赚）</b> 是「这一档多拿的量，按上一档单价折算成钱，减去你多花的钱」——
+          <p className="text-xs text-slate-500 mb-2">
+            卡片「A → B」里的 <b className="text-slate-600">A 就是基准档</b>：默认按总量从小到大逐档对比，即每一档与紧挨着的更小一档比；
+            <b className="text-slate-600">净省（白赚）</b> 是「这一档多拿的量，按基准档单价折算成钱，减去你多花的钱」——
             为正说明加量把多花的钱赚回来了，越大越值得升。
           </p>
+          <p className="text-xs text-slate-500 mb-4">
+            觉得默认基准不合心意？在下面选一个基准档，所有更大的档都会直接与它对比。
+          </p>
 
-          <div className="space-y-3">
-            {margins.map((m, i) => (
-              <UpgradeCard key={`${m.fromId}-${m.toId}-${i}`} m={m} />
-            ))}
+          {/* 基准档选择：默认逐档相邻对比，也可固定某一档为基准 */}
+          <div className="mb-4 flex items-center gap-2 flex-wrap text-xs no-print">
+            <span className="text-slate-500">基准档：</span>
+            <select
+              value={marginBaseId ?? ''}
+              onChange={(e) => setMarginBaseId(e.target.value || null)}
+              className="rounded-lg border border-edge bg-brand-soft/30 px-2 py-1 text-xs text-slate-600 dark:text-slate-300 max-w-full"
+              title="默认逐档对比（每档 vs 前一档）；选择某一档后，所有更大的档都与它直接对比"
+            >
+              <option value="">逐档对比（每档 vs 前一档，默认）</option>
+              {marginTiers.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {shortSpec(t.name)}（{fmt.priceUnit(displayUnitPrice(t.unitPrice, t.unit))}/{displayUnit(t.unit)}）
+                </option>
+              ))}
+            </select>
           </div>
+
+          {sectionMargins.length > 0 ? (
+            /* 自适应网格：宽屏一行两张卡填满留白，窄屏退回单列；grid 默认拉伸，同行卡片等高 */
+            <div className="grid gap-3 grid-cols-1 lg:grid-cols-2">
+              {sectionMargins.map((m, i) => (
+                <UpgradeCard key={`${m.fromId}-${m.toId}-${i}`} m={m} />
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 rounded-xl border border-edge bg-brand-soft/20 px-3 py-2.5">
+              选中的基准档已是总量最大的一档，没有可升的档位——换一个更小的基准试试。
+            </p>
+          )}
 
           {/* 逐档明细表：结论已在卡片里，明细默认收起 */}
           <button
@@ -1394,10 +1448,10 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
             className="mt-4 text-xs text-slate-500 hover:text-brand transition-colors inline-flex items-center gap-1.5 no-print"
           >
             <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showMarginTable ? 'rotate-180' : ''}`} />
-            {showMarginTable ? '收起逐档明细' : `展开逐档明细（${margins.length} 档）`}
+            {showMarginTable ? '收起逐档明细' : `展开逐档明细（${sectionMargins.length} 档）`}
           </button>
 
-          {showMarginTable && (
+          {showMarginTable && sectionMargins.length > 0 && (
             <div className="mt-3 overflow-x-auto">
               <table className="w-full text-xs min-w-[520px]">
                 <thead>
@@ -1411,7 +1465,7 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
                   </tr>
                 </thead>
                 <tbody>
-                  {margins.map((m, i) => {
+                  {sectionMargins.map((m, i) => {
                     const style = GRADE_STYLE[m.grade]
                     // 拆分规格名：优先显示关键规格部分（如 16g×8袋），口味作为副标题
                     const { flavor, spec } = parseFlavor(m.toName)
