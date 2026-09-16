@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Sku } from './types'
-import { isKnownUnit, aiNormalizeUnit, normalizeUnit } from './engine'
+import { isKnownUnit, normalizeUnit } from './engine'
+import { aiNormalizeUnit } from './aiNormalize'
 import { isAiReady } from './ai'
 
 /**
