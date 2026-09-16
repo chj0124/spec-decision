@@ -2,6 +2,8 @@
 // 配置（含密钥）存 localStorage；请求经本站同源代理 /api/ai-chat、/api/ai-models 转发——
 // 密钥会随请求体经过该代理，代理只做校验与转发，不落库、不记录请求体。
 
+import { report } from './telemetry'
+
 export interface AiConfig {
   baseUrl: string // 接口地址，如 https://api.deepseek.com/v1
   apiKey: string
@@ -73,6 +75,7 @@ async function requestChat(
   temperature = 0.1,
   timeoutMs = 90000,
   extraBody?: Record<string, any>,
+  kind: 'chat' | 'vision' = 'chat',
 ): Promise<string> {
   // 同源代理：dev / 生产一致，凭据放在 body 里由代理转发
   const url = '/api/ai-chat'
@@ -80,6 +83,7 @@ async function requestChat(
   // 超时控制：视觉模型处理图片可能需要 10-30 秒，给 90 秒上限
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const startedAt = Date.now()
 
   let resp: Response
   try {
@@ -98,6 +102,8 @@ async function requestChat(
     })
   } catch (e: any) {
     clearTimeout(timer)
+    // 埋点只带 kind/ok/ms：不含 baseUrl、apiKey、messages 等任何业务/凭据数据
+    report('warn', 'ai.request', { kind, ok: false, ms: Date.now() - startedAt })
     const reason = e?.message ?? String(e)
     // AbortError = 超时
     if (e?.name === 'AbortError' || /abort/i.test(reason)) {
@@ -112,6 +118,7 @@ async function requestChat(
   }
   clearTimeout(timer)
   if (!resp.ok) {
+    report('warn', 'ai.request', { kind, ok: false, status: resp.status, ms: Date.now() - startedAt })
     const t = await resp.text().catch(() => '')
     let detail = t
     try {
@@ -123,6 +130,7 @@ async function requestChat(
   const data = await resp.json().catch(() => null)
   const text = data?.choices?.[0]?.message?.content
   if (!text) throw new Error('AI 返回为空（代理未正确部署或被拦截）')
+  report('info', 'ai.request', { kind, ok: true, status: resp.status, ms: Date.now() - startedAt })
   return String(text)
 }
 
@@ -145,7 +153,7 @@ export async function chat(
     ...(system ? [{ role: 'system', content: system }] : []),
     { role: 'user', content: prompt },
   ]
-  return requestChat(c, c.model, messages, 0.1, timeoutMs ?? 90000, extraBody)
+  return requestChat(c, c.model, messages, 0.1, timeoutMs ?? 90000, extraBody, 'chat')
 }
 
 /**
@@ -175,7 +183,7 @@ export async function visionChat(
   ]
   // 禁用豆包推理模式（thinking:{"type":"disabled"}），大幅减少响应时间（实测 17.6s → 7.2s，
   // reasoning tokens 降为 0，识别结果正确）。其他 OpenAI 兼容服务商会忽略此参数，无副作用。
-  return requestChat(c, model, messages, 0.1, 90000, { thinking: { type: 'disabled' } })
+  return requestChat(c, model, messages, 0.1, 90000, { thinking: { type: 'disabled' } }, 'vision')
 }
 
 /**

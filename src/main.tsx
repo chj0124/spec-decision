@@ -1,7 +1,12 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
+import { installGlobalErrorHandlers } from './lib/telemetry'
 import './index.css'
+
+// 先挂全局错误捕获，再渲染 React：这样连首屏渲染期抛出的错误也能被记录。
+// 上报内容经过白名单脱敏，不含任何 SKU / 价格 / API key 等业务数据。
+installGlobalErrorHandlers()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
