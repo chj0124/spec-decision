@@ -8,6 +8,7 @@ import { parseQuickEntry, quickEntryToSku, quickEntryUnitPrice } from '../lib/qu
 import type { RecognizeResult } from '../lib/recognize'
 import { loadAiConfig, getVisionModel } from '../lib/ai'
 import { generateExample } from '../lib/aiSample'
+import { deriveFlavorColorMap, deriveDimColorMaps, deriveDimHasGroup, skusHaveFlavor } from '../lib/view-model'
 import RecognizeReview from './RecognizeReview'
 import WeightPie from './WeightPie'
 import {
@@ -624,29 +625,10 @@ export default function Workbench({ skus, onChange, onGenerate, config, onConfig
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
 
   // 分组上色：第一维度（口味/颜色/型号）用行底色，参数维度列用左侧色条
-  const flavorColorMap = new Map<string, string>()
-  let flavorColorIdx = 0
-  for (const s of skus) {
-    const f = parseFlavor(s.name).flavor || ''
-    if (f && !flavorColorMap.has(f)) {
-      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
-      flavorColorIdx++
-    }
-  }
-  const dimColorMaps = config.dims.map((d) => {
-    const map = new Map<string, string>()
-    let idx = 0
-    for (const s of skus) {
-      const v = String(s.params?.[d.id] ?? '')
-      if (v && !map.has(v)) {
-        map.set(v, GROUP_BAR_COLORS[idx % GROUP_BAR_COLORS.length])
-        idx++
-      }
-    }
-    return map
-  })
-  const dimHasGroup = dimColorMaps.map((m) => m.size >= 2)
-  const hasAnyFlavor = skus.some((s) => parseFlavor(s.name).flavor)
+  const flavorColorMap = deriveFlavorColorMap(skus, FLAVOR_COLORS)
+  const dimColorMaps = deriveDimColorMaps(skus, config.dims, GROUP_BAR_COLORS)
+  const dimHasGroup = deriveDimHasGroup(dimColorMaps)
+  const hasAnyFlavor = skusHaveFlavor(skus)
 
   return (
     <div className="space-y-6">

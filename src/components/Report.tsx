@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComputedSku, DecisionResult, DecisionConfig, Preference, SkuCluster, MarginInsight, WarningPair } from '../lib/types'
 import { fmt, isStale, STALE_DAYS, mergeVariantSkus, parseFlavor, inferFlavorLabel, priceTrend, fmtPointDay, displayUnit, displayQuantity, displayUnitPrice, marginAnalysis } from '../lib/engine'
 import {
+  shortSpec, packWord, listPackWord, splitWarnText, wrapCjk,
+  buildPreferenceHint, buildSummaryText,
+  groupComputedSkus, deriveGroupOptions, deriveFlavorColorMap,
+  deriveSpecRows, deriveVisualAnchorId, deriveOneLiner,
+} from '../lib/view-model'
+import type { FullGroupBy, SpecRow } from '../lib/view-model'
+import {
   Trophy, ArrowLeft, AlertTriangle, TrendingDown, TrendingUp, CheckCircle2,
   Crown, Medal, Award, Lightbulb, Scale, Layers, List, ChevronDown, RefreshCw,
   Printer, Copy, Check, Share2, Minus, ImageDown, Loader2, FilterX,
@@ -63,60 +70,11 @@ function CountUp({ value, format, className }: { value: number; format: (n: numb
   return <span className={className}>{text}</span>
 }
 
-/** 一句话结论 / 图表轴标签里的短名：优先「口味·规格」，超长截断 */
-function shortSpec(name: string): string {
-  const { spec, flavor } = parseFlavor(name)
-  if (spec && spec.length <= 12) return flavor ? `${flavor}·${spec}` : spec
-  return name.length > 12 ? name.slice(0, 12) + '…' : name
-}
-
-/**
- * 每件量词：优先用商品实际的件数量词（瓶/罐/袋/盒…），
- * 没有再按"是否多件"回退——多件用「包」、单件用「件」。
- * 这样瓶装饮料会显示"每瓶价格"而不是硬编码的"每包价格"。
- */
-const packWord = (packs: number, packUnit?: string): string =>
-  packUnit || (packs > 1 ? '包' : '件')
-
-/** 列表级每件量词：取列表里实际出现过的量词，没有则回退 */
-const listPackWord = (items: ComputedSku[]): string =>
-  items.find((i) => i.packUnit)?.packUnit || (items.some((i) => i.packs > 1) ? '包' : '件')
-
 /** 各决策偏好的静态说明（悬停在切换按钮上时显示） */
 const PREFERENCE_HINT: Record<Preference, string> = {
   value: '只看每单位单价，最便宜的排第 1，参数不参与排名',
   score: '价格分 × 价格权重 + 各参数维度分 × 参数权重，加权总分高的排第 1',
   budget: '先过滤掉总价超预算的规格，再按综合得分排名',
-}
-
-/**
- * 决策偏好的动态提示（显示在偏好按钮组正下方）：说清「当前数据下」各偏好会不会排出不同名次。
- * - 预算优先：行为直观（过滤超预算再按得分排），不需要提示 → null
- * - 没配参数维度，或配了但所有规格取值都相同 → 综合得分退化为价格分，
- *   「性价比优先」与「综合得分优先」排名完全一致（用户点击看不到变化的原因）；
- * - 有参数差异 → 提示当前价格 / 参数的权重侧重。
- */
-function buildPreferenceHint(
-  items: ComputedSku[],
-  config: DecisionConfig,
-  current: Preference,
-): string | null {
-  if (current === 'budget') return null
-  // 有实际区分度的参数维度：至少两个规格在该维度上取值不同
-  const effectiveDims = config.dims.filter((d) => {
-    const vals = items.map((i) => i.params?.[d.id])
-    const present = vals.filter((v) => v !== undefined)
-    if (present.length < 1) return false
-    return new Set(present.map(String)).size > 1
-  })
-  if (effectiveDims.length === 0) {
-    return '当前清单未配置有差异的参数维度，切换偏好不会改变排名'
-  }
-  const dimW = effectiveDims.reduce((s, d) => s + Math.max(0, d.weight), 0)
-  const priceW = Math.max(0, config.priceWeight)
-  const focus =
-    priceW > dimW * 1.5 ? '价格主导' : dimW > priceW * 1.5 ? '参数主导' : '价格参数并重'
-  return `综合得分 = 价格 ${priceW}% + 参数 ${dimW}% 加权（${focus}）`
 }
 
 /**
@@ -158,62 +116,6 @@ async function writeClipboard(text: string): Promise<void> {
   document.body.removeChild(ta)
 }
 
-/** 生成纯文本决策摘要（复制到剪贴板 / 导出用） */
-function buildSummaryText(result: DecisionResult, config: DecisionConfig): string {
-  const { best, items, reasons, warnings, margins, budgetExcludedItems } = result
-  if (!best) return ''
-  const lines: string[] = []
-  lines.push('【规格决策摘要】')
-  if (config.category) lines.push(`商品类型：${config.category}`)
-  lines.push(`生成时间：${new Date().toLocaleString('zh-CN')}`)
-  lines.push('')
-  lines.push(`★ 最划算：${best.name}`)
-  lines.push(
-    `  总价 ${fmt.yuan(best.price)} · 总量 ${fmt.num(displayQuantity(best.totalQuantity, best.unit))}${displayUnit(best.unit)}` +
-    ` · 每${displayUnit(best.unit)} ${fmt.priceUnit(displayUnitPrice(best.unitPrice, best.unit))} · 综合得分 ${best.score.toFixed(1)}`,
-  )
-  // 摘要会被粘贴到别处流转，脱离页面后就看不出数据有多旧了，所以把新鲜度写进正文
-  const priceAt = best.priceHistory?.[best.priceHistory.length - 1]?.t
-  if (priceAt) {
-    lines.push(
-      `  价格记录：${fmt.ago(priceAt)}` +
-      (isStale(priceAt) ? `（已超过 ${STALE_DAYS} 天未更新，结论可能过期）` : ''),
-    )
-  }
-  if (reasons.length > 0) {
-    lines.push('')
-    lines.push('推荐理由：')
-    reasons.forEach((r, i) => lines.push(`  ${i + 1}. ${r}`))
-  }
-  lines.push('')
-  lines.push(`完整排名（前 5 / 共 ${items.length} 项）：`)
-  items.slice(0, 5).forEach((it) => {
-    lines.push(`  ${it.rank}. ${it.name} — 每${displayUnit(it.unit)} ${fmt.priceUnit(displayUnitPrice(it.unitPrice, it.unit))}（总价 ${fmt.yuan(it.price)}）`)
-  })
-  // 被预算筛掉的规格也要写进摘要：粘贴出去后更要能自查"是我漏填了还是被规则排除了"
-  const budget = config.budget
-  if (config.preference === 'budget' && typeof budget === 'number' && budgetExcludedItems.length > 0) {
-    lines.push('')
-    lines.push(`因超预算未纳入比较（预算 ${fmt.yuan(budget)}，按超出金额从少到多）：`)
-    budgetExcludedItems.forEach((it) => {
-      lines.push(`  · ${it.name} — 总价 ${fmt.yuan(it.price)}，超 ${fmt.yuan(it.price - budget)}`)
-    })
-  }
-  if (margins.length > 0) {
-    lines.push('')
-    lines.push('边际效益：')
-    margins.forEach((m) => lines.push(`  · ${m.verdict}`))
-  }
-  if (warnings.length > 0) {
-    lines.push('')
-    lines.push('避坑提示：')
-    warnings.forEach((w) => lines.push(`  · ${w}`))
-  }
-  lines.push('')
-  lines.push('— 由「规格决策台」生成')
-  return lines.join('\n')
-}
-
 /** 第一分组维度（口味/颜色/型号）行底色调色板：与工作台保持一致（亮 / 暗双模式） */
 const FLAVOR_COLORS = [
   'bg-sky-100/60 dark:bg-sky-900/20',
@@ -226,87 +128,13 @@ const FLAVOR_COLORS = [
   'bg-teal-100/60 dark:bg-teal-900/20',
 ]
 
-/** 全量视图分组维度选项 key 类型 */
-type FullGroupBy = 'flavor' | 'quantity' | 'packs'
-
-/** 按 dimension 对 ComputedSku 分组（保留派生字段，避免丢 packPrice 等） */
-function groupComputedSkus(
-  skus: ComputedSku[],
-  by: FullGroupBy,
-  flavorLabel: string,
-): Array<{ key: string; items: ComputedSku[] }> {
-  const map = new Map<string, ComputedSku[]>()
-  for (const s of skus) {
-    let key = ''
-    if (by === 'flavor') key = parseFlavor(s.name).flavor || `（无${flavorLabel}）`
-    else if (by === 'quantity') key = `${s.quantity}${s.unit}`
-    else if (by === 'packs') key = `${s.packs}件`
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(s)
-  }
-  return [...map.entries()].map(([key, items]) => ({ key, items }))
-}
-
 /* ============ 主视觉：围绕「每单位单价」这一个标尺的四种看法 ============ */
 
 /** 主视觉视图类型（四种候选，供减法筛选） */
 type VisualKind = 'price' | 'perYuan' | 'quadrant' | 'savings'
 
-/** 主视觉用的单条规格（已合并同价同规格的口味变体，并按展示单位换算） */
-interface SpecRow {
-  id: string
-  /** 轴标签短名 */
-  name: string
-  /** 悬停 tooltip 用的完整名 */
-  fullName: string
-  /** 每展示单位单价（如 ¥/L） */
-  perUnit: number
-  /** 总量（展示单位） */
-  qty: number
-  /** 每 100 元能买到的展示单位量 */
-  per100: number
-  /** 相对全场最贵单价、按本档总量折算出的省下金额（¥） */
-  savings: number
-}
-
 /** 非冠军柱的中性色（亮 / 暗各一） */
 const neutralBar = (dark: boolean) => (dark ? '#52525f' : '#cdc7b8')
-
-/**
- * 把一条避坑提示拆成「粗体结论 + 灰色细节」两行（图注排版用）。
- * 提示句都是「结论，补充说明。」的写法，于是在第一个逗号处断开：
- * 「」单价比「」贵 357% ／ 除非有特殊需求，否则是明显的智商税。
- */
-function splitWarnText(text: string): { lead: string; detail: string } {
-  const i = text.indexOf('，')
-  const strip = (s: string) => s.replace(/[。，]$/, '')
-  if (i === -1) return { lead: strip(text), detail: '' }
-  return { lead: strip(text.slice(0, i)), detail: text.slice(i + 1) }
-}
-
-/**
- * SVG <text> 不会自动换行，这里按「可用宽度（以字宽 em 计）」手工折行：
- * CJK 字符记 1 个字宽，ASCII 记 0.55，逐字累加、超宽即断行。
- */
-function wrapCjk(text: string, maxEm: number): string[] {
-  const widthOf = (ch: string) => (/[\u2e80-\ufeff]/.test(ch) ? 1 : 0.55)
-  const lines: string[] = []
-  let cur = ''
-  let w = 0
-  for (const ch of text) {
-    const cw = widthOf(ch)
-    if (w + cw > maxEm && cur) {
-      lines.push(cur)
-      cur = ch
-      w = cw
-    } else {
-      cur += ch
-      w += cw
-    }
-  }
-  if (cur) lines.push(cur)
-  return lines
-}
 
 /* ============ 避坑对照的图形标注：行高亮 + 差值段 + 右缘括线 三合一 ============ */
 
@@ -897,30 +725,9 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
     })
   const flavorLabel = config.flavorLabel || inferFlavorLabel(config.category)
   // 口味分组底色：按 flavor 值稳定映射到调色板
-  const flavorColorMap = new Map<string, string>()
-  let flavorColorIdx = 0
-  for (const it of items) {
-    const f = parseFlavor(it.name).flavor || ''
-    if (f && !flavorColorMap.has(f)) {
-      flavorColorMap.set(f, FLAVOR_COLORS[flavorColorIdx % FLAVOR_COLORS.length])
-      flavorColorIdx++
-    }
-  }
+  const flavorColorMap = deriveFlavorColorMap(items, FLAVOR_COLORS)
   // 分组维度候选：过滤掉无区分意义的（所有 SKU 值相同 / 每组仅1项）
-  const groupOptions: Array<{ key: FullGroupBy; label: string }> = (() => {
-    if (items.length < 3) return []
-    const opts: Array<{ key: FullGroupBy; label: string; getVal: (s: ComputedSku) => string }> = [
-      { key: 'flavor', label: `按${flavorLabel}`, getVal: (s) => parseFlavor(s.name).flavor || '' },
-      { key: 'quantity', label: '按单件含量', getVal: (s) => `${s.quantity}${s.unit}` },
-      { key: 'packs', label: '按件数', getVal: (s) => `${s.packs}件` },
-    ]
-    return opts
-      .filter((o) => {
-        const vals = new Set(items.map(o.getVal))
-        return vals.size >= 2 && vals.size < items.length
-      })
-      .map(({ key, label }) => ({ key, label }))
-  })()
+  const groupOptions = deriveGroupOptions(items, flavorLabel)
 
   // 区分两种空态：真没数据 vs 预算偏好下全部规格超预算被过滤
   const budgetEmpty = items.length === 0 && config.preference === 'budget' && result.budgetExcludedItems.length > 0
@@ -964,53 +771,17 @@ export default function Report({ result, config, unitWarning, onBack, onPreferen
 
   // 主视觉数据：先合并「同价同规格」的口味变体，再统一换算到展示单位（ml→L），
   // 让「每单位单价」成为全场唯一标尺。省下金额 = 相比全场最贵单价、按本档总量折算。
-  const specRows: SpecRow[] = (() => {
-    const rows: SpecRow[] = mergeVariantSkus(items).map((m) => {
-      const perUnit = displayUnitPrice(m.unitPrice, m.unit)
-      return {
-        id: m.id,
-        name: shortSpec(m.name),
-        fullName: m.name,
-        // 单价保留 4 位小数：升档到"每瓶便宜 0.008 元"这种量级也能看出差别
-        perUnit: Math.round(perUnit * 1e4) / 1e4,
-        qty: displayQuantity(m.totalQuantity, m.unit),
-        per100: perUnit > 0 ? Math.round((100 / perUnit) * 100) / 100 : 0,
-        savings: 0,
-      }
-    })
-    const maxPerUnit = rows.reduce((mx, r) => Math.max(mx, r.perUnit), 0)
-    for (const r of rows) r.savings = Math.round((maxPerUnit - r.perUnit) * r.qty * 100) / 100
-    return rows
-  })()
+  const specRows: SpecRow[] = deriveSpecRows(items)
   // 展示单位标签（L / kg / 件…）：取列表里实际出现的单位换算结果
   const visualUnit = displayUnit(items[0]?.unit ?? '')
   // 高亮锚点：优先冠军规格；万一它被合并进同价变体，就退而选单价最低的那条。
   // 预算偏好下可能一条都不剩（items 为空），此时给空串兜底——空态不渲染主视觉，
   // 但这里在 return 之前求值，不给兜底会直接抛错把整个报告页打崩。
-  const visualAnchorId =
-    specRows.find((r) => r.id === best?.id)?.id ??
-    (specRows.length > 0
-      ? specRows.reduce((min, r) => (r.perUnit < min.perUnit ? r : min), specRows[0]).id
-      : '')
+  const visualAnchorId = deriveVisualAnchorId(specRows, best?.id)
 
   // 一句话结论：把"最划算"折算成「每单位省了多少钱 + 便宜百分之几 + 等量能省多少」，
   // 不读表格也能直接拿到性价比结论。
-  const oneLiner = (() => {
-    if (specRows.length < 2) return null
-    const anchor = specRows.find((r) => r.id === visualAnchorId)
-    if (!anchor || anchor.perUnit <= 0) return null
-    let worst = specRows[0]
-    for (const r of specRows) if (r.perUnit > worst.perUnit) worst = r
-    if (worst.id === anchor.id) return null
-    const savePerUnit = worst.perUnit - anchor.perUnit
-    return {
-      anchor,
-      worst,
-      savePerUnit,
-      pct: (savePerUnit / worst.perUnit) * 100,
-      vsWorst: savePerUnit * anchor.qty,
-    }
-  })()
+  const oneLiner = deriveOneLiner(specRows, visualAnchorId)
 
   // 主视觉候选（四种编码方式都做出来，后续按效果做减法）
   const VISUAL_OPTIONS: Array<{ k: VisualKind; label: string; hint: string }> = [
